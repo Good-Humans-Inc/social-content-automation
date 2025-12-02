@@ -1,0 +1,40 @@
+# Environments & secrets
+.env
+.env.*
+.python-version
+
+# Python cache/bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Build & packaging
+dist/
+build/
+*.egg-info/
+
+# Testing
+.pytest_cache/
+coverage.xml
+.coverage*
+
+# Editors/IDE
+.vscode/
+.idea/
+
+# macOS
+.DS_Store
+
+# Project outputs
+output/
+
+# Local config (may contain keys)
+config.yaml
+
+
+
