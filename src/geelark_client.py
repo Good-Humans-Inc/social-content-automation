@@ -90,6 +90,35 @@ class GeeLarkClient:
         data = self._post("/open/v1/task/add", body)
         return data.get("taskIds", [])
 
+    def list_phones(
+        self,
+        page: int = 1,
+        page_size: int = 100,
+        ids: Optional[List[str]] = None,
+        serial_name: Optional[str] = None,
+        remark: Optional[str] = None,
+        group_name: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+        charge_mode: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "page": max(1, page),
+            "pageSize": min(100, max(1, page_size)),
+        }
+        if ids:
+            payload["ids"] = ids[:100]
+        if serial_name:
+            payload["serialName"] = serial_name
+        if remark:
+            payload["remark"] = remark
+        if group_name:
+            payload["groupName"] = group_name
+        if tags:
+            payload["tags"] = tags
+        if charge_mode is not None:
+            payload["chargeMode"] = int(charge_mode)
+        return self._post("/open/v1/phone/list", payload)
+
     @staticmethod
     def infer_file_type(path: str) -> str:
         ext = os.path.splitext(path)[1].lower().lstrip(".")

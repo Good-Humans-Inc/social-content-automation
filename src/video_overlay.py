@@ -3,7 +3,7 @@ import shutil
 import subprocess
 import tempfile
 
-from src.image_overlay import OverlayOptions, _wrap_text
+from src.text_overlay import OverlayOptions, wrap_text
 
 
 def _hex_to_ffmpeg_color(hex_color: str) -> str:
@@ -66,7 +66,7 @@ def overlay_text_on_video(input_path: str, output_path: str, text: str, opts: Ov
     os.makedirs(os.path.dirname(os.path.abspath(output_path)) or ".", exist_ok=True)
 
     # Prepare wrapped text in a temp file (UTF-8)
-    wrapped = _wrap_text(text, opts.wrap_width_chars)
+    wrapped = wrap_text(text, opts.wrap_width_chars)
     with tempfile.TemporaryDirectory() as tmpdir:
         textfile = os.path.join(tmpdir, "overlay.txt")
         with open(textfile, "w", encoding="utf-8") as f:
