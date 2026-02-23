@@ -1,0 +1,44 @@
+{
+  "manifest_version": 3,
+  "name": "GeeLark Asset Scraper",
+  "version": "1.0.0",
+  "description": "Scrapes images from Pinterest and Google Images for the GeeLark automation dashboard",
+  "permissions": [
+    "storage",
+    "activeTab",
+    "scripting",
+    "tabs",
+    "notifications",
+    "debugger"
+  ],
+  "host_permissions": [
+    "https://*/*",
+    "http://*/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.pinterest.com/*",
+        "https://www.pinterest.ca/*",
+        "https://www.google.com/search*",
+        "https://www.google.ca/search*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_end"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["icon48.png"],
+      "matches": ["<all_urls>"]
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "GeeLark Scraper"
+  },
+  "options_page": "options.html"
+}

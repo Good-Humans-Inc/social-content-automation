@@ -1,0 +1,188 @@
+'use client'
+
+import { useState } from 'react'
+import {
+  Paper,
+  Box,
+  Typography,
+  Chip,
+  Stack,
+  IconButton,
+  Dialog,
+  Button,
+  Alert,
+} from '@mui/material'
+import EditIcon from '@mui/icons-material/Edit'
+import DeleteIcon from '@mui/icons-material/Delete'
+import TemplateCreateForm, { Template } from './TemplateCreateForm'
+
+// Template interface is now imported from TemplateCreateForm
+interface TemplateWithMetadata extends Template {
+  used: any
+  created_at: string
+}
+
+interface TemplatesListProps {
+  initialTemplates: TemplateWithMetadata[]
+}
+
+export default function TemplatesList({ initialTemplates }: TemplatesListProps) {
+  const [templates, setTemplates] = useState(initialTemplates)
+  const [editingTemplate, setEditingTemplate] = useState<TemplateWithMetadata | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const handleEdit = (template: TemplateWithMetadata) => {
+    setEditingTemplate(template)
+  }
+
+  const handleDelete = async (template: TemplateWithMetadata) => {
+    if (!confirm(`Are you sure you want to delete template "${template.id}"?`)) {
+      return
+    }
+
+    try {
+      const response = await fetch(`/api/templates?id=${template.id}`, {
+        method: 'DELETE',
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.error || 'Failed to delete template')
+      }
+
+      setTemplates(templates.filter(t => t.id !== template.id))
+      setError(null)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to delete template')
+    }
+  }
+
+  const handleUpdate = () => {
+    // Refresh templates list
+    window.location.reload()
+  }
+
+  const handleCloseEdit = () => {
+    setEditingTemplate(null)
+  }
+
+  return (
+    <>
+      {error && (
+        <Alert severity="error" onClose={() => setError(null)} sx={{ mb: 2 }}>
+          {error}
+        </Alert>
+      )}
+      <Paper>
+        <Box sx={{ p: 3 }}>
+          <Stack spacing={2}>
+            {templates.map((template) => {
+              const isCharacterGrid = template.carousel_type === 'character_grid'
+              
+              return (
+                <Paper
+                  key={template.id}
+                  variant="outlined"
+                  sx={{ p: 2, '&:hover': { bgcolor: 'action.hover' } }}
+                >
+                  <Stack spacing={1}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', justifyContent: 'space-between' }}>
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+                        <Typography variant="body1" fontWeight="medium">
+                          {template.id}
+                        </Typography>
+                        <Chip label={template.persona} size="small" color="primary" />
+                        <Chip label={template.fandom} size="small" color="success" />
+                        <Chip label={template.intensity} size="small" color="secondary" />
+                        {template.used && (
+                          <Chip label="Used" size="small" color="error" />
+                        )}
+                        {isCharacterGrid && (
+                          <Chip 
+                            label={`Carousel: ${template.carousel_type} (${template.grid_images || 4} images)`} 
+                            size="small" 
+                            color="info"
+                          />
+                        )}
+                        {!isCharacterGrid && template.overlay && template.overlay.length > 0 && (
+                          <Chip 
+                            label="Rapid Images" 
+                            size="small" 
+                            variant="outlined"
+                          />
+                        )}
+                      </Box>
+                      <Box>
+                        <IconButton
+                          size="small"
+                          onClick={() => handleEdit(template)}
+                          color="primary"
+                        >
+                          <EditIcon />
+                        </IconButton>
+                        <IconButton
+                          size="small"
+                          onClick={() => handleDelete(template)}
+                          color="error"
+                        >
+                          <DeleteIcon />
+                        </IconButton>
+                      </Box>
+                    </Box>
+                    <Typography variant="body2" color="text.secondary">
+                      {template.caption}
+                    </Typography>
+                    {template.overlay && template.overlay.length > 0 && (
+                      <Box>
+                        {template.overlay.map((line, idx) => (
+                          <Typography key={idx} variant="caption" color="text.secondary" display="block">
+                            {line}
+                          </Typography>
+                        ))}
+                      </Box>
+                    )}
+                    {template.tags && template.tags.length > 0 && (
+                      <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mt: 1 }}>
+                        {template.tags.map((tag, idx) => (
+                          <Chip
+                            key={idx}
+                            label={tag}
+                            size="small"
+                            variant="outlined"
+                          />
+                        ))}
+                      </Box>
+                    )}
+                  </Stack>
+                </Paper>
+              )
+            })}
+          </Stack>
+          {templates.length === 0 && (
+            <Typography color="text.secondary" textAlign="center" sx={{ py: 4 }}>
+              No templates found
+            </Typography>
+          )}
+        </Box>
+      </Paper>
+
+      {/* Edit Dialog */}
+      <Dialog 
+        open={!!editingTemplate} 
+        onClose={handleCloseEdit} 
+        maxWidth="md" 
+        fullWidth
+      >
+        {editingTemplate && (
+          <TemplateCreateForm
+            initialTemplate={editingTemplate}
+            isEdit={true}
+            onSuccess={handleUpdate}
+            onCancel={handleCloseEdit}
+          />
+        )}
+      </Dialog>
+    </>
+  )
+}
+

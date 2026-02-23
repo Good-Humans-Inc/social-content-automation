@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body {
+      width: 550px;
+      padding: 24px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background-color: #f9fafb;
+    }
+    h1 {
+      font-size: 20px;
+      margin: 0 0 24px 0;
+      color: #111827;
+    }
+    .form-group {
+      margin-bottom: 20px;
+    }
+    .mode-selector {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 20px;
+      padding: 16px;
+      background: white;
+      border-radius: 8px;
+      border: 2px solid #e5e7eb;
+    }
+    .mode-option {
+      flex: 1;
+      padding: 12px;
+      border: 2px solid #e5e7eb;
+      border-radius: 8px;
+      cursor: pointer;
+      text-align: center;
+      transition: all 0.2s;
+      background: white;
+    }
+    .mode-option:hover {
+      border-color: #3b82f6;
+      background: #eff6ff;
+    }
+    .mode-option input[type="radio"] {
+      display: none;
+    }
+    .mode-option.active {
+      border-color: #3b82f6;
+      background: #dbeafe;
+      font-weight: 600;
+    }
+    .mode-option label {
+      cursor: pointer;
+      margin: 0;
+      display: block;
+      font-weight: 500;
+      color: #374151;
+    }
+    .mode-option small {
+      display: block;
+      margin-top: 4px;
+      font-size: 11px;
+      color: #6b7280;
+      font-weight: normal;
+    }
+    label {
+      display: block;
+      margin-bottom: 8px;
+      font-weight: 500;
+      color: #374151;
+    }
+    input[type="url"],
+    input[type="text"] {
+      width: 100%;
+      padding: 10px;
+      border: 1px solid #d1d5db;
+      border-radius: 6px;
+      font-size: 14px;
+      box-sizing: border-box;
+    }
+    input:focus {
+      outline: none;
+      border-color: #3b82f6;
+      box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+    }
+    input:disabled {
+      background-color: #f3f4f6;
+      cursor: not-allowed;
+    }
+    .url-input-group {
+      padding: 16px;
+      background: white;
+      border-radius: 8px;
+      border: 1px solid #e5e7eb;
+    }
+    button {
+      width: 100%;
+      padding: 12px 20px;
+      background-color: #3b82f6;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 500;
+      margin-top: 8px;
+    }
+    button:hover {
+      background-color: #2563eb;
+    }
+    button:active {
+      transform: scale(0.98);
+    }
+    .success {
+      margin-top: 16px;
+      padding: 12px;
+      background-color: #d1fae5;
+      color: #065f46;
+      border-radius: 6px;
+      display: none;
+    }
+    .error {
+      margin-top: 16px;
+      padding: 12px;
+      background-color: #fee2e2;
+      color: #991b1b;
+      border-radius: 6px;
+      display: none;
+    }
+    .current-status {
+      margin-top: 16px;
+      padding: 12px;
+      background-color: #eff6ff;
+      color: #1e40af;
+      border-radius: 6px;
+      font-size: 13px;
+    }
+    .current-status strong {
+      display: block;
+      margin-bottom: 4px;
+    }
+    small {
+      display: block;
+      margin-top: 6px;
+      color: #6b7280;
+      font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+  <h1>GeeLark Scraper Configuration</h1>
+  
+  <form id="configForm">
+    <!-- Mode Selector -->
+    <div class="form-group">
+      <div class="mode-selector">
+        <div class="mode-option" id="modeLocal">
+          <input type="radio" id="radioLocal" name="mode" value="local" checked>
+          <label for="radioLocal">
+            Local Development
+            <small>http://localhost:3000</small>
+          </label>
+        </div>
+        <div class="mode-option" id="modeProduction">
+          <input type="radio" id="radioProduction" name="mode" value="production">
+          <label for="radioProduction">
+            Production
+            <small>Your deployed URL</small>
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <!-- Local Development URL -->
+    <div class="form-group" id="localUrlGroup">
+      <div class="url-input-group">
+        <label for="localUrl">Local Dashboard URL</label>
+        <input type="url" id="localUrl" value="http://localhost:3000" placeholder="http://localhost:3000">
+        <small>Default: http://localhost:3000 (editable)</small>
+      </div>
+    </div>
+
+    <!-- Production URL -->
+    <div class="form-group" id="productionUrlGroup" style="display: none;">
+      <div class="url-input-group">
+        <label for="productionUrl">Production Dashboard URL</label>
+        <input type="url" id="productionUrl" placeholder="https://your-dashboard.vercel.app">
+        <small>Enter your deployed dashboard URL (e.g., Vercel, Netlify)</small>
+      </div>
+    </div>
+
+    <!-- API Key (shown for production) -->
+    <div class="form-group" id="apiKeyGroup" style="display: none;">
+      <div class="url-input-group">
+        <label for="apiKey">API Key (Optional)</label>
+        <input type="text" id="apiKey" placeholder="Leave empty if not required">
+        <small>Optional: Only needed if your production API requires authentication</small>
+      </div>
+    </div>
+
+    <button type="submit">Save Configuration</button>
+  </form>
+
+  <div id="success" class="success">Configuration saved successfully!</div>
+  <div id="error" class="error"></div>
+  
+  <div id="currentStatus" class="current-status" style="display: none;">
+    <strong>Current Configuration:</strong>
+    <span id="statusText"></span>
+  </div>
+
+  <script src="options.js"></script>
+</body>
+</html>
