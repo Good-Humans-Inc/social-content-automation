@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import {
   Paper,
   Box,
@@ -24,12 +24,17 @@ interface TemplateWithMetadata extends Template {
 
 interface TemplatesListProps {
   initialTemplates: TemplateWithMetadata[]
+  onDeleteSuccess?: () => void
 }
 
-export default function TemplatesList({ initialTemplates }: TemplatesListProps) {
+export default function TemplatesList({ initialTemplates, onDeleteSuccess }: TemplatesListProps) {
   const [templates, setTemplates] = useState(initialTemplates)
   const [editingTemplate, setEditingTemplate] = useState<TemplateWithMetadata | null>(null)
   const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    setTemplates(initialTemplates)
+  }, [initialTemplates])
 
   const handleEdit = (template: TemplateWithMetadata) => {
     setEditingTemplate(template)
@@ -50,7 +55,11 @@ export default function TemplatesList({ initialTemplates }: TemplatesListProps) 
         throw new Error(errorData.error || 'Failed to delete template')
       }
 
-      setTemplates(templates.filter(t => t.id !== template.id))
+      if (onDeleteSuccess) {
+        onDeleteSuccess()
+      } else {
+        setTemplates(templates.filter(t => t.id !== template.id))
+      }
       setError(null)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to delete template')

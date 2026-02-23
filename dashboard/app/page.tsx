@@ -32,21 +32,21 @@ export default async function Home() {
       console.error('Error fetching assets count:', assetsResult.error)
       assetsCount.error = assetsResult.error
     } else {
-      assetsCount = assetsResult
+      assetsCount = { count: assetsResult.count ?? 0, error: null }
     }
 
     if (templatesResult.error) {
       console.error('Error fetching templates count:', templatesResult.error)
       templatesCount.error = templatesResult.error
     } else {
-      templatesCount = templatesResult
+      templatesCount = { count: templatesResult.count ?? 0, error: null }
     }
 
     if (accountsResult.error) {
       console.error('Error fetching accounts count:', accountsResult.error)
       accountsCount.error = accountsResult.error
     } else {
-      accountsCount = accountsResult
+      accountsCount = { count: accountsResult.count ?? 0, error: null }
     }
 
     if (recentLogsResult.error) {

@@ -9,6 +9,7 @@ export async function GET(request: NextRequest) {
     const fandom = searchParams.get('fandom')
     const intensity = searchParams.get('intensity')
     const unused = searchParams.get('unused') === 'true'
+    const search = searchParams.get('q')?.trim() || searchParams.get('search')?.trim()
     const page = parseInt(searchParams.get('page') || '1')
     const limit = parseInt(searchParams.get('limit') || '50')
     const offset = (page - 1) * limit
@@ -33,6 +34,16 @@ export async function GET(request: NextRequest) {
 
     if (unused) {
       query = query.is('used', null)
+    }
+
+    if (search) {
+      const safe = search.replace(/,/g, ' ').replace(/%/g, '').replace(/_/g, ' ').trim()
+      if (safe) {
+        const term = `%${safe}%`
+        query = query.or(
+          `id.ilike.${term},caption.ilike.${term},persona.ilike.${term},fandom.ilike.${term}`
+        )
+      }
     }
 
     const { data, error, count } = await query

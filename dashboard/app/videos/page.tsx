@@ -7,7 +7,6 @@ import {
   Box, 
   Card, 
   CardContent, 
-  Grid, 
   Chip, 
   Stack, 
   CircularProgress,
@@ -172,51 +171,60 @@ export default function VideosPage() {
             </Typography>
           </Box>
         ) : (
-          <Grid container spacing={3} sx={{ mt: 2 }}>
+          <Box
+            sx={{
+              display: 'flex',
+              flexWrap: 'wrap',
+              gap: 3,
+              mt: 2,
+              '& > *': {
+                flex: '1 1 280px',
+                minWidth: 0,
+              },
+            }}
+          >
             {videos.map((video) => (
-              <Grid item xs={12} sm={6} md={4} key={video.id}>
-                <Card>
-                  <Box sx={{ position: 'relative', width: '100%', bgcolor: 'black' }}>
-                    <video
-                      controls
-                      style={{
-                        width: '100%',
-                        maxHeight: '400px',
-                        display: 'block',
-                      }}
-                      src={video.video_url}
-                      preload="metadata"
-                    >
-                      Your browser does not support the video tag.
-                    </video>
-                  </Box>
-                  <CardContent>
-                    <Stack spacing={1}>
-                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
-                        <Typography variant="subtitle1" fontWeight="medium">
-                          {video.accounts?.display_name || video.account_id}
-                        </Typography>
-                        <Chip
-                          label={video.status}
-                          size="small"
-                          color={video.status === 'success' ? 'success' : 'error'}
-                        />
-                        <Chip label={video.post_type} size="small" color="primary" />
-                      </Box>
-                      <Typography variant="body2" color="text.secondary" sx={{ minHeight: '40px' }}>
-                        {video.templates?.caption || 'No caption'}
+              <Card key={video.id}>
+                <Box sx={{ position: 'relative', width: '100%', bgcolor: 'black' }}>
+                  <video
+                    controls
+                    style={{
+                      width: '100%',
+                      maxHeight: '400px',
+                      display: 'block',
+                    }}
+                    src={video.video_url}
+                    preload="metadata"
+                  >
+                    Your browser does not support the video tag.
+                  </video>
+                </Box>
+                <CardContent>
+                  <Stack spacing={1}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+                      <Typography variant="subtitle1" fontWeight="medium">
+                        {video.accounts?.display_name || video.account_id}
                       </Typography>
-                      <Typography variant="caption" color="text.secondary">
-                        {new Date(video.created_at).toLocaleString()}
-                        {video.scheduled_time &&
-                          ` | Scheduled: ${new Date(video.scheduled_time).toLocaleString()}`}
-                      </Typography>
-                    </Stack>
-                  </CardContent>
-                </Card>
-              </Grid>
+                      <Chip
+                        label={video.status}
+                        size="small"
+                        color={video.status === 'success' ? 'success' : 'error'}
+                      />
+                      <Chip label={video.post_type} size="small" color="primary" />
+                    </Box>
+                    <Typography variant="body2" color="text.secondary" sx={{ minHeight: '40px' }}>
+                      {video.templates?.caption || 'No caption'}
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      {new Date(video.created_at).toLocaleString()}
+                      {video.scheduled_time &&
+                        ` | Scheduled: ${new Date(video.scheduled_time).toLocaleString()}`}
+                    </Typography>
+                  </Stack>
+                </CardContent>
+              </Card>
             ))}
-          </Grid>
+          </Box>
         )}
       </TabPanel>
     </Container>

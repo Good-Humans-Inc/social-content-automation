@@ -75,13 +75,8 @@ export async function GET(request: NextRequest) {
     }
     
     const assets = allAssets
-    const error = null // No error if we got here
     console.log(`[DEBUG] Total assets fetched: ${assets.length}`)
 
-    if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 })
-    }
-    
     // Debug: Count assets by status
     const totalAssets = assets?.length || 0
     let assetsWithCategory = 0

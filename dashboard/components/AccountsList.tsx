@@ -37,6 +37,13 @@ interface GeeLarkPhone {
   }
   tags?: string[]
   chargeMode?: number
+  equipmentInfo?: {
+    phoneNumber?: string
+    countryName?: string
+    deviceBrand?: string
+    deviceModel?: string
+    osVersion?: string
+  }
 }
 
 export default function AccountsList({ initialAccounts }: AccountsListProps) {

@@ -30,21 +30,11 @@ import CloseIcon from '@mui/icons-material/Close'
 import ImageIcon from '@mui/icons-material/Image'
 import { createClient } from '@/lib/supabase/client'
 import Image from 'next/image'
+import TemplateSelector, { TemplateOption } from '@/components/TemplateSelector'
 
 interface JobCreateFormProps {
   onSuccess?: () => void
   onCancel?: () => void
-}
-
-interface Template {
-  id: string
-  persona: string
-  fandom: string
-  intensity: string
-  caption: string
-  overlay: string[]
-  carousel_type?: string | null
-  grid_images?: number | null
 }
 
 interface Account {
@@ -325,7 +315,7 @@ export default function JobCreateForm({ onSuccess, onCancel }: JobCreateFormProp
     output_as_slides: false,
   })
 
-  const [templates, setTemplates] = useState<Template[]>([])
+  const [selectedTemplateObject, setSelectedTemplateObject] = useState<TemplateOption | null>(null)
   const [accounts, setAccounts] = useState<Account[]>([])
   const [assets, setAssets] = useState<Asset[]>([])
   const [musicAssets, setMusicAssets] = useState<Asset[]>([])
@@ -354,14 +344,6 @@ export default function JobCreateForm({ onSuccess, onCancel }: JobCreateFormProp
   useEffect(() => {
     const loadData = async () => {
       try {
-        // Load templates
-        const { data: templatesData } = await supabase
-          .from('templates')
-          .select('*')
-          .order('created_at', { ascending: false })
-          .limit(100)
-        setTemplates(templatesData || [])
-
         // Load accounts
         const { data: accountsData } = await supabase
           .from('accounts')
@@ -400,15 +382,8 @@ export default function JobCreateForm({ onSuccess, onCancel }: JobCreateFormProp
     loadData()
   }, [supabase])
 
-  // Memoize selected template and derived values
-  const selectedTemplate = useMemo(
-    () => templates.find(t => t.id === formData.template_id),
-    [templates, formData.template_id]
-  )
-  const isCharacterGrid = useMemo(
-    () => selectedTemplate?.carousel_type === 'character_grid',
-    [selectedTemplate]
-  )
+  const selectedTemplate = selectedTemplateObject
+  const isCharacterGrid = selectedTemplate?.carousel_type === 'character_grid'
 
   // Memoized function to load grouped assets with caching
   const loadGroupedAssets = useCallback(async (useCache = true) => {
@@ -724,28 +699,16 @@ export default function JobCreateForm({ onSuccess, onCancel }: JobCreateFormProp
             Basic Information
           </Typography>
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-            <FormControl fullWidth required>
-              <InputLabel>Template</InputLabel>
-              <Select
-                value={formData.template_id}
-                onChange={(e) => setFormData(prev => ({ ...prev, template_id: e.target.value }))}
-                label="Template"
-                sx={{ fontSize: '0.95rem' }}
-              >
-                {templates.map((template) => (
-                  <MenuItem key={template.id} value={template.id} sx={{ fontSize: '0.95rem' }}>
-                    <Box>
-                      <Typography variant="body2" fontWeight="medium">
-                        {template.id}
-                      </Typography>
-                      <Typography variant="caption" color="text.secondary">
-                        {template.persona} • {template.fandom} • {template.intensity}
-                      </Typography>
-                    </Box>
-                  </MenuItem>
-                ))}
-              </Select>
-            </FormControl>
+            <TemplateSelector
+              value={formData.template_id}
+              onChange={(templateId, template) => {
+                setFormData(prev => ({ ...prev, template_id: templateId }))
+                setSelectedTemplateObject(template ?? null)
+              }}
+              label="Template"
+              required
+              selectedTemplate={selectedTemplateObject}
+            />
             {selectedTemplate && (
               <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', alignItems: 'center' }}>
                 <Chip label={selectedTemplate.persona} size="small" color="primary" />

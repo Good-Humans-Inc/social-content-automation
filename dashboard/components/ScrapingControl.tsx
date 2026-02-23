@@ -13,7 +13,6 @@ import {
   TextField,
   Button,
   Box,
-  Grid,
   Checkbox,
   Stack,
 } from '@mui/material'
@@ -274,26 +273,36 @@ export default function ScrapingControl() {
                       </Button>
                     </Box>
                   </Box>
-                  <Grid container spacing={1} sx={{ mt: 1 }}>
+                  <Box
+                    sx={{
+                      display: 'flex',
+                      flexWrap: 'wrap',
+                      gap: 1,
+                      mt: 1,
+                      '& > *': {
+                        flex: '1 1 120px',
+                        minWidth: 0,
+                      },
+                    }}
+                  >
                     {anime.characters.map((character) => {
                       const isSelected = (selectedCharacters[anime.id] || new Set()).has(character)
                       return (
-                        <Grid item xs={6} sm={4} md={3} key={character}>
-                          <FormControlLabel
-                            control={
-                              <Checkbox
-                                checked={isSelected}
-                                onChange={() => handleCharacterToggle(anime.id, character)}
-                                size="small"
-                              />
-                            }
-                            label={character.charAt(0).toUpperCase() + character.slice(1)}
-                            sx={{ m: 0 }}
-                          />
-                        </Grid>
+                        <FormControlLabel
+                          key={character}
+                          control={
+                            <Checkbox
+                              checked={isSelected}
+                              onChange={() => handleCharacterToggle(anime.id, character)}
+                              size="small"
+                            />
+                          }
+                          label={character.charAt(0).toUpperCase() + character.slice(1)}
+                          sx={{ m: 0 }}
+                        />
                       )
                     })}
-                  </Grid>
+                  </Box>
                   <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
                     Selected: {(selectedCharacters[anime.id] || new Set()).size} / {anime.characters.length}
                   </Typography>

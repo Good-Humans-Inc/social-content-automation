@@ -18,6 +18,7 @@ import {
   ToggleButtonGroup,
 } from '@mui/material'
 import CloudUploadIcon from '@mui/icons-material/CloudUpload'
+import TemplateSelector from '@/components/TemplateSelector'
 
 interface Video {
   id: string
@@ -38,10 +39,6 @@ interface Account {
   display_name: string
 }
 
-interface Template {
-  id: string
-  caption: string
-}
 
 type Timezone = 'Asia/Jakarta' | 'Europe/London'
 
@@ -123,7 +120,6 @@ export default function VideoUploader({ videos, onUploadSuccess }: VideoUploader
   const [scheduleDatetime, setScheduleDatetime] = useState('')
   const [uploading, setUploading] = useState(false)
   const [accounts, setAccounts] = useState<Account[]>([])
-  const [templates, setTemplates] = useState<Template[]>([])
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
 
@@ -135,17 +131,7 @@ export default function VideoUploader({ videos, onUploadSuccess }: VideoUploader
 
   useEffect(() => {
     fetchAccounts()
-    fetchTemplates()
   }, [])
-
-  useEffect(() => {
-    if (selectedTemplate) {
-      const template = templates.find((t) => t.id === selectedTemplate)
-      if (template) {
-        setCaption(template.caption)
-      }
-    }
-  }, [selectedTemplate, templates])
 
   useEffect(() => {
     if (selectedVideo) {
@@ -155,6 +141,14 @@ export default function VideoUploader({ videos, onUploadSuccess }: VideoUploader
       }
       if (video && video.template_id) {
         setSelectedTemplate(video.template_id)
+        // Fetch template to fill caption
+        fetch(`/api/templates?q=${encodeURIComponent(video.template_id)}&limit=1`)
+          .then((res) => res.ok ? res.json() : null)
+          .then((json) => {
+            const t = json?.data?.[0]
+            if (t?.caption) setCaption(t.caption)
+          })
+          .catch(() => {})
       }
     }
   }, [selectedVideo, videos])
@@ -170,20 +164,6 @@ export default function VideoUploader({ videos, onUploadSuccess }: VideoUploader
     } catch (error) {
       console.error('Error fetching accounts:', error)
       setAccounts([])
-    }
-  }
-
-  const fetchTemplates = async () => {
-    try {
-      const response = await fetch('/api/templates')
-      if (response.ok) {
-        const result = await response.json()
-        const templatesArray = result?.data || result || []
-        setTemplates(Array.isArray(templatesArray) ? templatesArray : [])
-      }
-    } catch (error) {
-      console.error('Error fetching templates:', error)
-      setTemplates([])
     }
   }
 
@@ -328,22 +308,16 @@ export default function VideoUploader({ videos, onUploadSuccess }: VideoUploader
           </Select>
         </FormControl>
 
-        <FormControl fullWidth>
-          <InputLabel>Select Template (Optional)</InputLabel>
-          <Select
-            value={selectedTemplate}
-            onChange={(e) => setSelectedTemplate(e.target.value)}
-            label="Select Template (Optional)"
-            disabled={uploading}
-          >
-            <MenuItem value="">None</MenuItem>
-            {Array.isArray(templates) && templates.map((template) => (
-              <MenuItem key={template.id} value={template.id}>
-                {template.id} - {template.caption?.substring(0, 50) || 'No caption'}...
-              </MenuItem>
-            ))}
-          </Select>
-        </FormControl>
+        <TemplateSelector
+          value={selectedTemplate}
+          onChange={(templateId, template) => {
+            setSelectedTemplate(templateId)
+            if (template) setCaption(template.caption)
+          }}
+          label="Select Template (Optional)"
+          allowEmpty
+          disabled={uploading}
+        />
 
         <TextField
           label="Caption"

@@ -1,6 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import LogsList from '@/components/LogsList'
-import { Container, Typography, Grid, Card, CardContent } from '@mui/material'
+import { Container, Typography, Box, Card, CardContent } from '@mui/material'
 
 export default async function LogsPage() {
   const supabase = await createClient()
@@ -36,56 +36,59 @@ export default async function LogsPage() {
       </Typography>
 
       {/* Stats */}
-      <Grid container spacing={3} sx={{ mb: 4 }}>
-        <Grid item xs={12} sm={6} md={3}>
-          <Card>
-            <CardContent>
-              <Typography variant="h6" color="text.secondary" gutterBottom>
-                Total Posts
-              </Typography>
-              <Typography variant="h4" fontWeight="bold">
-                {totalCount || 0}
-              </Typography>
-            </CardContent>
-          </Card>
-        </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <Card>
-            <CardContent>
-              <Typography variant="h6" color="text.secondary" gutterBottom>
-                Successful
-              </Typography>
-              <Typography variant="h4" fontWeight="bold" color="success.main">
-                {successCount || 0}
-              </Typography>
-            </CardContent>
-          </Card>
-        </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <Card>
-            <CardContent>
-              <Typography variant="h6" color="text.secondary" gutterBottom>
-                Failed
-              </Typography>
-              <Typography variant="h4" fontWeight="bold" color="error.main">
-                {failedCount || 0}
-              </Typography>
-            </CardContent>
-          </Card>
-        </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <Card>
-            <CardContent>
-              <Typography variant="h6" color="text.secondary" gutterBottom>
-                Success Rate
-              </Typography>
-              <Typography variant="h4" fontWeight="bold" color="primary.main">
-                {successRate.toFixed(1)}%
-              </Typography>
-            </CardContent>
-          </Card>
-        </Grid>
-      </Grid>
+      <Box
+        sx={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: 3,
+          mb: 4,
+          '& > *': {
+            flex: '1 1 200px',
+            minWidth: 0,
+          },
+        }}
+      >
+        <Card>
+          <CardContent>
+            <Typography variant="h6" color="text.secondary" gutterBottom>
+              Total Posts
+            </Typography>
+            <Typography variant="h4" fontWeight="bold">
+              {totalCount || 0}
+            </Typography>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent>
+            <Typography variant="h6" color="text.secondary" gutterBottom>
+              Successful
+            </Typography>
+            <Typography variant="h4" fontWeight="bold" color="success.main">
+              {successCount || 0}
+            </Typography>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent>
+            <Typography variant="h6" color="text.secondary" gutterBottom>
+              Failed
+            </Typography>
+            <Typography variant="h4" fontWeight="bold" color="error.main">
+              {failedCount || 0}
+            </Typography>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent>
+            <Typography variant="h6" color="text.secondary" gutterBottom>
+              Success Rate
+            </Typography>
+            <Typography variant="h4" fontWeight="bold" color="primary.main">
+              {successRate.toFixed(1)}%
+            </Typography>
+          </CardContent>
+        </Card>
+      </Box>
 
       <LogsList initialLogs={logs || []} />
     </Container>

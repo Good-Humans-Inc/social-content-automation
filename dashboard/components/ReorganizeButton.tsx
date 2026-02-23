@@ -84,29 +84,6 @@ export default function ReorganizeButton() {
           window.location.reload()
         }, 2000)
       }
-
-      const data = await response.json()
-
-      if (response.ok) {
-        setResult({
-          success: true,
-          message: data.message,
-          moved: data.moved,
-          updated: data.updated,
-          total: data.total,
-          errors: data.errors,
-        })
-        
-        // Reload page after 2 seconds to show updated structure
-        setTimeout(() => {
-          window.location.reload()
-        }, 2000)
-      } else {
-        setResult({
-          success: false,
-          message: data.error || 'Failed to reorganize assets',
-        })
-      }
     } catch (error: any) {
       setResult({
         success: false,

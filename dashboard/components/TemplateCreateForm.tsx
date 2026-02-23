@@ -12,7 +12,6 @@ import {
   Button,
   Alert,
   IconButton,
-  Grid,
   Paper,
   Collapse,
   List,
@@ -24,18 +23,6 @@ import {
 } from '@mui/material'
 import CloseIcon from '@mui/icons-material/Close'
 import DeleteIcon from '@mui/icons-material/Delete'
-
-interface Template {
-  id: string
-  persona: string
-  fandom: string
-  intensity: string
-  overlay: string[]
-  caption: string
-  tags: string[]
-  carousel_type?: string | null
-  grid_images?: number | null
-}
 
 export interface Template {
   id: string
@@ -411,31 +398,34 @@ export default function TemplateCreateForm({ onSuccess, onCancel, initialTemplat
 
         {/* Character Grid Settings */}
         {templateType === 'character_grid' && (
-          <Grid container spacing={2}>
-            <Grid item xs={12} md={6}>
-              <TextField
-                fullWidth
-                label="Carousel Type"
-                required
-                value={formData.carousel_type}
-                onChange={(e) => setFormData({ ...formData, carousel_type: e.target.value })}
-                placeholder="character_grid"
-                helperText="Type of carousel (e.g., 'character_grid')"
-              />
-            </Grid>
-            <Grid item xs={12} md={6}>
-              <TextField
-                fullWidth
-                label="Grid Images"
-                required
-                type="number"
-                value={formData.grid_images}
-                onChange={(e) => setFormData({ ...formData, grid_images: parseInt(e.target.value) || 4 })}
-                inputProps={{ min: 1, max: 9 }}
-                helperText="Number of images in grid (typically 4 for 2x2)"
-              />
-            </Grid>
-          </Grid>
+          <Box
+            sx={{
+              display: 'flex',
+              flexWrap: 'wrap',
+              gap: 2,
+              '& > *': { flex: '1 1 280px', minWidth: 0 },
+            }}
+          >
+            <TextField
+              fullWidth
+              label="Carousel Type"
+              required
+              value={formData.carousel_type}
+              onChange={(e) => setFormData({ ...formData, carousel_type: e.target.value })}
+              placeholder="character_grid"
+              helperText="Type of carousel (e.g., 'character_grid')"
+            />
+            <TextField
+              fullWidth
+              label="Grid Images"
+              required
+              type="number"
+              value={formData.grid_images}
+              onChange={(e) => setFormData({ ...formData, grid_images: parseInt(e.target.value) || 4 })}
+              inputProps={{ min: 1, max: 9 }}
+              helperText="Number of images in grid (typically 4 for 2x2)"
+            />
+          </Box>
         )}
 
         {/* Overlay Lines - Only for Rapid Images */}
@@ -526,19 +516,25 @@ export default function TemplateCreateForm({ onSuccess, onCancel, initialTemplat
           <Typography variant="body2" fontWeight="medium" sx={{ mb: 1 }}>
             Tags (5 recommended) <span style={{ color: 'red' }}>*</span>
           </Typography>
-          <Grid container spacing={1}>
+          <Box
+            sx={{
+              display: 'flex',
+              flexWrap: 'wrap',
+              gap: 1,
+              '& > *': { flex: '1 1 200px', minWidth: 0 },
+            }}
+          >
             {formData.tags.map((tag, index) => (
-              <Grid item xs={12} sm={6} key={index}>
-                <TextField
-                  fullWidth
-                  value={tag}
-                  onChange={(e) => handleTagChange(index, e.target.value)}
-                  placeholder={`Tag ${index + 1}${index < 2 ? ' (fandom)' : index === 2 ? ' (general)' : index === 3 ? ' (emotional)' : ' (traffic)'}`}
-                  size="small"
-                />
-              </Grid>
+              <TextField
+                key={index}
+                fullWidth
+                value={tag}
+                onChange={(e) => handleTagChange(index, e.target.value)}
+                placeholder={`Tag ${index + 1}${index < 2 ? ' (fandom)' : index === 2 ? ' (general)' : index === 3 ? ' (emotional)' : ' (traffic)'}`}
+                size="small"
+              />
             ))}
-          </Grid>
+          </Box>
           <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: 'block' }}>
             Structure: 2 fandom tags, 1 general anime/gaming, 1 emotional/interactive, 1 traffic (#fyp). # will be added automatically.
           </Typography>

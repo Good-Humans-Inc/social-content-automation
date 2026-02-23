@@ -333,6 +333,9 @@ export async function POST(request: NextRequest) {
         }
       }
       
+      // Use extracted search query if we found one, otherwise use original
+      const searchQueryToUse = extractedSearchQuery || finalSearchQuery
+      
       // Debug: Log what we found - check raw values
       console.log(`[DEBUG] Asset ${asset.id.substring(0, 8)}...`)
       console.log(`[DEBUG]   - search_query column: ${searchQuery || '(null or empty)'}`)
@@ -342,9 +345,6 @@ export async function POST(request: NextRequest) {
       console.log(`[DEBUG]   - finalSearchQuery: ${searchQueryToUse || '(none)'}`)
       console.log(`[DEBUG]   - extractedSearchQuery: ${extractedSearchQuery || '(none)'}`)
       console.log(`[DEBUG]   - Current category: ${asset.category}, subcategory: ${asset.subcategory}`)
-      
-      // Use extracted search query if we found one, otherwise use original
-      const searchQueryToUse = extractedSearchQuery || finalSearchQuery
       
       // Only categorize if we have a search query or description
       if (!searchQueryToUse && !description) {
