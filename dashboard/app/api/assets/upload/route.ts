@@ -71,7 +71,7 @@ function findCategoryFromSearchTerm(searchTerm: string | null, description?: str
     const jjkCharacters = [
       'gojo satoru', 'sukuna', 'megumi fushiguro', 'yuji itadori', 'nobara kugisaki',
       'nanami', 'todo', 'yuta okkotsu', 'toji fushiguro', 'geto suguru', 'panda', 'toge inumaki',
-      'maki zenin', 'yuki tsukumo', 'kenjaku', 'mahito', 'jogo', 'hanami', 'dagon'
+      'maki zenin', 'kasumi miwa', 'yuki tsukumo', 'kenjaku', 'mahito', 'jogo', 'hanami', 'dagon'
     ]
     
     const jjkAliases: Record<string, string[]> = {
@@ -88,6 +88,7 @@ function findCategoryFromSearchTerm(searchTerm: string | null, description?: str
       'panda': ['panda'],
       'toge inumaki': ['toge', 'inumaki', 'toge inumaki'],
       'maki zenin': ['maki', 'zenin', 'maki zenin'],
+      'kasumi miwa': ['miwa', 'kasumi miwa', 'kasumi'],
       'yuki tsukumo': ['yuki', 'tsukumo', 'yuki tsukumo'],
       'kenjaku': ['kenjaku'],
       'mahito': ['mahito'],
@@ -188,6 +189,22 @@ export async function POST(request: NextRequest) {
 
     if (!file) {
       return NextResponse.json({ error: 'No file provided' }, { status: 400 })
+    }
+
+    // Reject unsupported image types so we don't store files that can't be displayed
+    const SUPPORTED_TYPES = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/gif']
+    const fileType = (file.type || '').toLowerCase().split(';')[0].trim()
+    if (!fileType || !SUPPORTED_TYPES.includes(fileType)) {
+      return NextResponse.json(
+        { error: 'Unsupported image type. Use JPEG, PNG, WebP, or GIF.', unsupported: true },
+        { status: 400 }
+      )
+    }
+    if (file.size < 500) {
+      return NextResponse.json(
+        { error: 'File too small to be a valid image.', unsupported: true },
+        { status: 400 }
+      )
     }
 
     // Check for duplicate by image URL (normalized) BEFORE uploading file
@@ -377,7 +394,7 @@ export async function POST(request: NextRequest) {
           // JJK characters (check aliases too)
           'gojo', 'satoru', 'sukuna', 'megumi', 'fushiguro', 'yuji', 'itadori', 'nobara', 'kugisaki',
           'nanami', 'todo', 'yuta', 'okkotsu', 'toji', 'geto', 'suguru', 'panda', 'toge', 'inumaki',
-          'maki', 'zenin', 'yuki', 'tsukumo', 'kenjaku', 'mahito', 'jogo', 'hanami', 'dagon'
+          'maki', 'zenin', 'miwa', 'kasumi', 'yuki', 'tsukumo', 'kenjaku', 'mahito', 'jogo', 'hanami', 'dagon'
         ]
         for (const charName of characterNames) {
           if (lowerQuery.includes(charName)) {
@@ -411,14 +428,12 @@ export async function POST(request: NextRequest) {
       // Calculate MD5 hash of the file
       fileHash = createHash('md5').update(buffer).digest('hex')
     } catch (error) {
-      // If image processing fails, log but continue (might not be an image file)
-      console.warn('Error processing image metadata:', error)
-      // Still calculate hash even if image processing fails
-      try {
-        fileHash = createHash('md5').update(buffer).digest('hex')
-      } catch (hashError) {
-        console.error('Error calculating file hash:', hashError)
-      }
+      // If image processing fails, reject so we don't store corrupt/unsupported images
+      console.warn('Error processing image (unsupported or corrupt):', error)
+      return NextResponse.json(
+        { error: 'Image could not be processed (unsupported or corrupt).', unsupported: true },
+        { status: 400 }
+      )
     }
     
     // Check for duplicate by file hash (more reliable than URL)

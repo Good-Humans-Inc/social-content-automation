@@ -2,7 +2,10 @@
 // Debug mode: All operations are logged with [DEBUG], [ERROR], [SUCCESS] prefixes
 
 let isScraping = false;
-const POLL_INTERVAL = 1000; // Poll every 1 second for immediate response
+const POLL_FAST = 2000;      // 2s when dashboard is likely active
+const POLL_SLOW = 15000;     // 15s when idle for a while
+const BACKOFF_AFTER = 60000; // switch to slow after 1 min of no triggers
+let lastTriggerTime = Date.now();
 
 console.log('[DEBUG] Background script loaded');
 
@@ -102,7 +105,7 @@ function extractCharacterName(text, fandom) {
       characters: [
         'gojo satoru', 'sukuna', 'megumi fushiguro', 'yuji itadori', 'nobara kugisaki',
         'nanami', 'todo', 'yuta okkotsu', 'toji fushiguro', 'geto suguru', 'panda', 'toge inumaki',
-        'maki zenin', 'yuki tsukumo', 'kenjaku', 'mahito', 'jogo', 'hanami', 'dagon'
+        'maki zenin', 'kasumi miwa', 'yuki tsukumo', 'kenjaku', 'mahito', 'jogo', 'hanami', 'dagon'
       ],
       aliases: {
         'gojo satoru': ['gojo', 'satoru gojo', 'satoru', 'gojo satoru'],
@@ -118,6 +121,7 @@ function extractCharacterName(text, fandom) {
         'panda': ['panda'],
         'toge inumaki': ['toge', 'inumaki', 'toge inumaki'],
         'maki zenin': ['maki', 'zenin', 'maki zenin'],
+        'kasumi miwa': ['miwa', 'kasumi miwa', 'kasumi'],
         'yuki tsukumo': ['yuki', 'tsukumo', 'yuki tsukumo'],
         'kenjaku': ['kenjaku'],
         'mahito': ['mahito'],
@@ -208,8 +212,7 @@ async function pollForTriggers() {
     }
 
     const url = `${config.dashboardUrl}/api/scraping/trigger`;
-    console.log('[DEBUG] Polling for triggers:', url);
-    
+
     const response = await fetch(url, {
       method: 'GET',
       headers,
@@ -246,6 +249,7 @@ async function pollForTriggers() {
       sourceType: data.data.source_type,
       maxPosts: data.data.max_posts
     });
+    lastTriggerTime = Date.now();
     isScraping = true;
     
     // Show notification
@@ -968,6 +972,31 @@ async function startScrapingDirectly(triggerData) {
   isScraping = false;
 }
 
+// Supported image MIME types for scraping (formats the dashboard can display/process)
+const SUPPORTED_IMAGE_TYPES = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/gif'];
+const MIN_IMAGE_SIZE_BYTES = 500; // Skip tiny blobs (placeholders, error pages)
+
+// Validate that a blob is a supported, decodable image; returns false if we should skip
+async function isSupportedImage(blob) {
+  if (!blob || blob.size < MIN_IMAGE_SIZE_BYTES) {
+    console.log(`[SKIP] Unsupported image: too small or empty (${blob?.size ?? 0} bytes)`);
+    return false;
+  }
+  const type = (blob.type || '').toLowerCase().split(';')[0].trim();
+  if (type && !SUPPORTED_IMAGE_TYPES.includes(type)) {
+    console.log(`[SKIP] Unsupported image type: "${blob.type}" (supported: ${SUPPORTED_IMAGE_TYPES.join(', ')})`);
+    return false;
+  }
+  try {
+    const bitmap = await createImageBitmap(blob);
+    if (bitmap) bitmap.close();
+    return true;
+  } catch (e) {
+    console.log(`[SKIP] Image could not be decoded (corrupt or unsupported format):`, e?.message || e);
+    return false;
+  }
+}
+
 // Upload asset to dashboard with timeout fallback
 async function uploadAsset(imageData, config) {
   const UPLOAD_TIMEOUT_MS = 60000; // 60 seconds timeout per image
@@ -1000,6 +1029,14 @@ async function uploadAsset(imageData, config) {
     
     const blob = await response.blob();
     console.log(`[DEBUG] Image blob size: ${blob.size} bytes, type: ${blob.type}`);
+
+    // Skip unsupported or invalid images (wrong type, too small, or won't decode)
+    const supported = await isSupportedImage(blob);
+    if (!supported) {
+      clearTimeout(timeoutId);
+      return;
+    }
+
     const file = new File([blob], imageData.filename || 'image.jpg', { type: blob.type });
 
     // Upload to dashboard
@@ -1045,11 +1082,12 @@ async function uploadAsset(imageData, config) {
 
     if (!uploadResponse.ok) {
       const errorText = await uploadResponse.text();
-      console.error(`[ERROR] Failed to upload asset (${uploadResponse.status}):`, errorText);
-      
-      // Check if it's a bucket error
       try {
         const errorJson = JSON.parse(errorText);
+        if (errorJson.unsupported || (uploadResponse.status === 400 && errorJson.error)) {
+          console.log(`[SKIP] Unsupported image (server rejected):`, errorJson.error);
+          return;
+        }
         if (errorJson.error && errorJson.error.includes('Bucket not found')) {
           console.error(`[ERROR] Supabase Storage bucket 'assets' not found!`);
           console.error(`[ERROR] Please create a bucket named 'assets' in your Supabase Storage.`);
@@ -1058,6 +1096,7 @@ async function uploadAsset(imageData, config) {
       } catch (e) {
         // Not JSON, that's okay
       }
+      console.error(`[ERROR] Failed to upload asset (${uploadResponse.status}):`, errorText);
       return;
     }
     
@@ -1183,7 +1222,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
   
   if (request.action === 'pollNow') {
-    // Manual trigger to poll immediately
+    lastTriggerTime = Date.now();
     pollForTriggers().then(() => {
       sendResponse({ success: true });
     });
@@ -1198,13 +1237,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 });
 
-// Start polling when extension is installed or enabled
+// Adaptive polling: fast when dashboard is active, slow when idle
+async function startPolling() {
+  await pollForTriggers();
+  const idleTime = Date.now() - lastTriggerTime;
+  const nextInterval = idleTime > BACKOFF_AFTER ? POLL_SLOW : POLL_FAST;
+  setTimeout(startPolling, nextInterval);
+}
+
 chrome.runtime.onInstalled.addListener(() => {
   console.log('GeeLark Scraper extension installed');
-  pollForTriggers();
-  setInterval(pollForTriggers, POLL_INTERVAL);
 });
 
-// Also start polling on startup
-pollForTriggers();
-setInterval(pollForTriggers, POLL_INTERVAL);
+startPolling();

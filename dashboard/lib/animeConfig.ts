@@ -25,6 +25,7 @@ export const animeConfigs: AnimeConfig[] = [
       'panda',
       'toge inumaki',
       'maki zenin',
+      'kasumi miwa',
       'yuki tsukumo',
       'kenjaku',
       'mahito',

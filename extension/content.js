@@ -1313,7 +1313,7 @@ function extractCharacterName(text, fandom) {
       characters: [
         'gojo satoru', 'sukuna', 'megumi fushiguro', 'yuji itadori', 'nobara kugisaki',
         'nanami', 'todo', 'yuta okkotsu', 'toji fushiguro', 'geto suguru', 'panda', 'toge inumaki',
-        'maki zenin', 'yuki tsukumo', 'kenjaku', 'mahito', 'jogo', 'hanami', 'dagon'
+        'maki zenin', 'kasumi miwa', 'yuki tsukumo', 'kenjaku', 'mahito', 'jogo', 'hanami', 'dagon'
       ],
       aliases: {
         'gojo satoru': ['gojo', 'satoru gojo', 'satoru', 'gojo satoru'],
@@ -1329,6 +1329,7 @@ function extractCharacterName(text, fandom) {
         'panda': ['panda'],
         'toge inumaki': ['toge', 'inumaki', 'toge inumaki'],
         'maki zenin': ['maki', 'zenin', 'maki zenin'],
+        'kasumi miwa': ['miwa', 'kasumi miwa', 'kasumi'],
         'yuki tsukumo': ['yuki', 'tsukumo', 'yuki tsukumo'],
         'kenjaku': ['kenjaku'],
         'mahito': ['mahito'],
