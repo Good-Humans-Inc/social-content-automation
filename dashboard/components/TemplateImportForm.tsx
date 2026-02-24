@@ -109,17 +109,34 @@ export default function TemplateImportForm({ onSuccess, onCancel }: TemplateImpo
     const templates = []
     const errors: Array<{ id: string; error: string }> = []
 
-    // Try to parse as single JSON object first (nested structure)
+    // Try to parse as single JSON object first
     try {
       const parsed = JSON.parse(content.trim())
       
-      // Check if it's a nested structure with arrays
+      // Check if it's a single template object (has template-specific fields)
+      if (typeof parsed === 'object' && !Array.isArray(parsed) && parsed.id && parsed.persona) {
+        const validation = validateTemplate(parsed, 0)
+        if (validation.valid) {
+          templates.push(normalizeTemplate(parsed))
+        } else {
+          errors.push({
+            id: parsed.id || 'template_1',
+            error: validation.error || 'Invalid template',
+          })
+        }
+        return { templates, errors }
+      }
+      
+      // Check if it's a nested structure with arrays of template objects
       if (typeof parsed === 'object' && !Array.isArray(parsed)) {
-        // Look for arrays in the object (like T0_templates, T1_templates, etc.)
-        const arrayKeys = Object.keys(parsed).filter(key => Array.isArray(parsed[key]))
+        const arrayKeys = Object.keys(parsed).filter(key =>
+          Array.isArray(parsed[key]) &&
+          parsed[key].length > 0 &&
+          typeof parsed[key][0] === 'object' &&
+          parsed[key][0] !== null
+        )
         
         if (arrayKeys.length > 0) {
-          // It's a nested JSON structure
           let templateIndex = 0
           for (const key of arrayKeys) {
             const templateArray = parsed[key]
@@ -140,20 +157,6 @@ export default function TemplateImportForm({ onSuccess, onCancel }: TemplateImpo
           }
           return { templates, errors }
         }
-      }
-      
-      // Check if it's a single template object
-      if (parsed.id && parsed.persona) {
-        const validation = validateTemplate(parsed, 0)
-        if (validation.valid) {
-          templates.push(normalizeTemplate(parsed))
-        } else {
-          errors.push({
-            id: parsed.id || 'template_1',
-            error: validation.error || 'Invalid template',
-          })
-        }
-        return { templates, errors }
       }
       
       // Check if it's an array of templates
