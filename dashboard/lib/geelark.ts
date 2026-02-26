@@ -406,6 +406,227 @@ export class GeeLarkClient {
     }
   }
 
+  /**
+   * Start cloud phones by ID. Uses GeeLark open API phone control.
+   */
+  async startPhones(phoneIds: string[]): Promise<{ success: boolean; message?: string; data?: any }> {
+    if (!phoneIds?.length) {
+      return { success: false, message: 'No phone IDs provided' }
+    }
+    const headers = await this.getHeaders()
+    const response = await fetch(`${this.apiBase}/open/v1/phone/start`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ ids: phoneIds }),
+    })
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok) {
+      throw new GeeLarkError(
+        data.msg || `Failed to start phones: ${response.statusText}`,
+        data.code,
+        response.status
+      )
+    }
+    if (data.code !== 0 && data.code !== undefined) {
+      throw new GeeLarkError(
+        data.msg || 'GeeLark API error',
+        data.code,
+        response.status
+      )
+    }
+    return { success: true, data: data.data }
+  }
+
+  /**
+   * Stop cloud phones by ID.
+   */
+  async stopPhones(phoneIds: string[]): Promise<{ success: boolean; message?: string; data?: any }> {
+    if (!phoneIds?.length) {
+      return { success: false, message: 'No phone IDs provided' }
+    }
+    const headers = await this.getHeaders()
+    const response = await fetch(`${this.apiBase}/open/v1/phone/stop`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ ids: phoneIds }),
+    })
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok) {
+      throw new GeeLarkError(
+        data.msg || `Failed to stop phones: ${response.statusText}`,
+        data.code,
+        response.status
+      )
+    }
+    if (data.code !== 0 && data.code !== undefined) {
+      throw new GeeLarkError(
+        data.msg || 'GeeLark API error',
+        data.code,
+        response.status
+      )
+    }
+    return { success: true, data: data.data }
+  }
+
+  /**
+   * Query task status by task IDs.
+   */
+  async queryTaskStatus(taskIds: string[]): Promise<{ tasks?: Array<{ taskId: string; status: number | string; [k: string]: any }> }> {
+    if (!taskIds?.length) {
+      return { tasks: [] }
+    }
+    const headers = await this.getHeaders()
+    const response = await fetch(`${this.apiBase}/open/v1/task/query`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ taskIds }),
+    })
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok) {
+      throw new GeeLarkError(
+        data.msg || `Failed to query tasks: ${response.statusText}`,
+        data.code,
+        response.status
+      )
+    }
+    if (data.code !== 0 && data.code !== undefined) {
+      throw new GeeLarkError(
+        data.msg || 'GeeLark API error',
+        data.code,
+        response.status
+      )
+    }
+    return { tasks: data.data?.list ?? data.data?.tasks ?? data.data ?? [] }
+  }
+
+  /**
+   * Add warmup task (taskType 2). Per GeeLark docs: scheduleAt, envId, action, duration (minutes), optional keywords.
+   * action: "search profile" | "search video" | "browse video"
+   */
+  async addWarmupTask(
+    envIds: string[],
+    options: {
+      scheduleAt: number
+      action: 'search profile' | 'search video' | 'browse video'
+      duration: number
+      keywords?: string[]
+      planName?: string
+      remark?: string
+    }
+  ): Promise<string[]> {
+    if (!envIds?.length) {
+      return []
+    }
+    const headers = await this.getHeaders()
+    const list = envIds.map((envId) => {
+      const item: Record<string, unknown> = {
+        scheduleAt: options.scheduleAt,
+        envId,
+        action: options.action,
+        duration: options.duration,
+      }
+      if (options.keywords?.length) item.keywords = options.keywords
+      return item
+    })
+
+    const body: any = {
+      taskType: 2, // Warmup per docs (1=video, 2=warmup, 3=image set)
+      list,
+    }
+    if (options?.planName) body.planName = options.planName
+    if (options?.remark) body.remark = options.remark
+
+    const response = await fetch(`${this.apiBase}/open/v1/task/add`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+    })
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok) {
+      throw new GeeLarkError(
+        data.msg || `Failed to add warmup task: ${response.statusText}`,
+        data.code,
+        response.status
+      )
+    }
+    if (data.code !== 0 && data.code !== undefined) {
+      throw new GeeLarkError(
+        data.msg || 'GeeLark API error',
+        data.code,
+        response.status
+      )
+    }
+    return data.data?.taskIds ?? data.data?.list?.map((t: any) => t.taskId) ?? []
+  }
+
+  /**
+   * Get task detail (status, failDesc, logs, etc.). Supports log pagination via searchAfter.
+   * POST /open/v1/task/detail
+   */
+  async getTaskDetail(
+    taskId: string,
+    searchAfter?: unknown
+  ): Promise<{
+    id: string
+    planName?: string
+    taskType?: number
+    serialName?: string
+    envId?: string
+    scheduleAt?: number
+    status?: number
+    failCode?: number
+    failDesc?: string
+    cost?: number
+    resultImages?: string[]
+    logs?: string[]
+    searchAfter?: unknown
+    logContinue?: boolean
+  }> {
+    if (!taskId?.trim()) {
+      throw new GeeLarkError('Task ID is required', undefined, 400)
+    }
+    const headers = await this.getHeaders()
+    const body: { id: string; searchAfter?: unknown } = { id: taskId.trim() }
+    if (searchAfter !== undefined) body.searchAfter = searchAfter
+
+    const response = await fetch(`${this.apiBase}/open/v1/task/detail`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+    })
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok) {
+      throw new GeeLarkError(
+        data.msg || `Failed to get task detail: ${response.statusText}`,
+        data.code,
+        response.status
+      )
+    }
+    if (data.code !== 0 && data.code !== undefined) {
+      throw new GeeLarkError(
+        data.msg || 'GeeLark API error',
+        data.code,
+        response.status
+      )
+    }
+    return (data.data || {}) as {
+      id: string
+      planName?: string
+      taskType?: number
+      serialName?: string
+      envId?: string
+      scheduleAt?: number
+      status?: number
+      failCode?: number
+      failDesc?: string
+      cost?: number
+      resultImages?: string[]
+      logs?: string[]
+      searchAfter?: unknown
+      logContinue?: boolean
+    }
+  }
+
   static inferFileType(urlOrPath: string): string {
     const ext = urlOrPath.split('.').pop()?.toLowerCase() || ''
     if (['mp4', 'mov', 'avi'].includes(ext)) return 'mp4'

@@ -160,14 +160,15 @@ export async function POST(request: NextRequest) {
 
     // Log to database using admin client (bypasses RLS)
     const adminSupabase = createAdminClient()
-    const { error: logError } = await adminSupabase.from('post_logs').insert({
-      template_id: template_id || null,
+    const { error: logError } = await adminSupabase.from('logs').insert({
+      type: 'video',
       account_id: account_id,
-      post_type: 'video',
       status: 'success',
       scheduled_time: new Date(scheduleAt * 1000).toISOString(),
       video_url: video_url,
       resource_url: resourceUrl,
+      task_id: taskIds[0] || null,
+      template_id: template_id || null,
     })
 
     if (logError) {

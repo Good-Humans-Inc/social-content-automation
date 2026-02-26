@@ -5,24 +5,28 @@ import { Container, Typography, Box, Card, CardContent } from '@mui/material'
 export default async function LogsPage() {
   const supabase = await createClient()
 
-  const { data: logs } = await supabase
-    .from('post_logs')
+  const { data: logsData } = await supabase
+    .from('logs')
     .select('*, accounts(*), templates(*)')
     .order('created_at', { ascending: false })
-    .limit(100)
+    .limit(200)
 
-  // Get stats
+  const logs = (logsData || []).map((row) => ({
+    ...row,
+    logType: row.type === 'warmup' ? ('warmup' as const) : ('post' as const),
+  }))
+
   const { count: totalCount } = await supabase
-    .from('post_logs')
+    .from('logs')
     .select('*', { count: 'exact', head: true })
 
   const { count: successCount } = await supabase
-    .from('post_logs')
+    .from('logs')
     .select('*', { count: 'exact', head: true })
     .eq('status', 'success')
 
   const { count: failedCount } = await supabase
-    .from('post_logs')
+    .from('logs')
     .select('*', { count: 'exact', head: true })
     .eq('status', 'failed')
 
@@ -32,7 +36,10 @@ export default async function LogsPage() {
   return (
     <Container maxWidth="xl" sx={{ py: 4 }}>
       <Typography variant="h4" component="h1" fontWeight="bold" sx={{ mb: 4 }}>
-        Posting Logs
+        Logs
+      </Typography>
+      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+        All logs: video posting, warmup runs, and other GeeLark tasks. Click &quot;GeeLark detail&quot; for full task logs when available.
       </Typography>
 
       {/* Stats */}

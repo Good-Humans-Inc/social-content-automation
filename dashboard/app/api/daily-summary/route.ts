@@ -13,7 +13,7 @@ export async function GET(request: NextRequest) {
 
     const [logsResult, accountsResult] = await Promise.all([
       supabase
-        .from('post_logs')
+        .from('logs')
         .select('*, accounts(id, display_name, persona), templates(id, intensity)')
         .gte('created_at', startOfDay)
         .lte('created_at', endOfDay)

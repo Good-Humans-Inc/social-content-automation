@@ -1,12 +1,15 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { Paper, Box, Typography, Chip, Stack, Button, Alert, CircularProgress, Dialog, DialogTitle, DialogContent, DialogActions, TextField, Slider, IconButton, Collapse } from '@mui/material'
+import { Paper, Box, Typography, Chip, Stack, Button, Alert, CircularProgress, Dialog, DialogTitle, DialogContent, DialogActions, TextField, Slider, IconButton, Collapse, Checkbox, FormControlLabel } from '@mui/material'
 import RefreshIcon from '@mui/icons-material/Refresh'
 import SyncIcon from '@mui/icons-material/Sync'
 import EditIcon from '@mui/icons-material/Edit'
 import SaveIcon from '@mui/icons-material/Save'
 import CloseIcon from '@mui/icons-material/Close'
+import LocalFireDepartmentIcon from '@mui/icons-material/LocalFireDepartment'
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
+import ExpandLessIcon from '@mui/icons-material/ExpandLess'
 
 interface Account {
   id: string
@@ -46,6 +49,16 @@ interface GeeLarkPhone {
   }
 }
 
+interface WarmupProfileLog {
+  accountId: string
+  displayName: string
+  envId: string
+  cloudPhoneId: string
+  status: 'success' | 'failed' | 'skipped'
+  message?: string
+  taskId?: string
+}
+
 export default function AccountsList({ initialAccounts }: AccountsListProps) {
   const [accounts, setAccounts] = useState<Account[]>(initialAccounts)
   const [geelarkPhones, setGeeLarkPhones] = useState<GeeLarkPhone[]>([])
@@ -57,6 +70,14 @@ export default function AccountsList({ initialAccounts }: AccountsListProps) {
   const [editTarget, setEditTarget] = useState(2)
   const [editRatio, setEditRatio] = useState<[number, number, number]>([50, 30, 20])
   const [saving, setSaving] = useState(false)
+  const [warmupSectionOpen, setWarmupSectionOpen] = useState(false)
+  const [warmupSelectedIds, setWarmupSelectedIds] = useState<Set<string>>(new Set())
+  const [warmupRunning, setWarmupRunning] = useState(false)
+  const [warmupLogs, setWarmupLogs] = useState<WarmupProfileLog[]>([])
+  const [warmupPlanName, setWarmupPlanName] = useState('warmup-plan')
+  const [warmupKeywords, setWarmupKeywords] = useState('')
+  const [warmupDurationMinutes, setWarmupDurationMinutes] = useState(10)
+  const [warmupAction, setWarmupAction] = useState<'search profile' | 'search video' | 'browse video'>('browse video')
 
   const startEditing = useCallback((account: Account) => {
     setEditingId(account.id)
@@ -206,6 +227,63 @@ export default function AccountsList({ initialAccounts }: AccountsListProps) {
     }
   }
 
+  const toggleWarmupAccount = (accountId: string) => {
+    setWarmupSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(accountId)) next.delete(accountId)
+      else next.add(accountId)
+      return next
+    })
+  }
+
+  const selectAllWarmup = () => {
+    if (warmupSelectedIds.size === accounts.length) {
+      setWarmupSelectedIds(new Set())
+    } else {
+      setWarmupSelectedIds(new Set(accounts.map((a) => a.id)))
+    }
+  }
+
+  const runWarmup = async () => {
+    const ids = Array.from(warmupSelectedIds)
+    if (ids.length === 0) {
+      setError('Select at least one account to run warmup.')
+      return
+    }
+    setWarmupRunning(true)
+    setError(null)
+    setWarmupLogs([])
+    try {
+      const keywordsList = warmupKeywords
+        ? warmupKeywords.split(/[\s,]+/).map((k) => k.trim()).filter(Boolean)
+        : undefined
+      const response = await fetch('/api/geelark/warmup/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          accountIds: ids,
+          planName: warmupPlanName || 'warmup-plan',
+          action: warmupAction,
+          keywords: keywordsList,
+          durationMinutes: warmupDurationMinutes,
+        }),
+      })
+      const data = await response.json()
+      if (!response.ok) {
+        throw new Error(data.error || data.message || 'Warmup request failed')
+      }
+      setWarmupLogs(data.logs || [])
+      if (data.message) {
+        setError(null)
+      }
+    } catch (err: any) {
+      setError(err.message || 'Warmup failed')
+      setWarmupLogs([])
+    } finally {
+      setWarmupRunning(false)
+    }
+  }
+
   return (
     <Paper>
       <Box sx={{ p: 3 }}>
@@ -240,6 +318,172 @@ export default function AccountsList({ initialAccounts }: AccountsListProps) {
             {error}
           </Alert>
         )}
+
+        {/* Warmup section */}
+        <Paper variant="outlined" sx={{ mb: 3, overflow: 'hidden' }}>
+          <Box
+            sx={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              p: 2,
+              bgcolor: 'grey.50',
+              cursor: 'pointer',
+              borderBottom: warmupSectionOpen ? 1 : 0,
+              borderColor: 'divider',
+            }}
+            onClick={() => setWarmupSectionOpen((o) => !o)}
+          >
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <LocalFireDepartmentIcon color="primary" />
+              <Typography variant="h6">Warmup accounts</Typography>
+              <Chip
+                size="small"
+                label={`${warmupSelectedIds.size} selected`}
+                color={warmupSelectedIds.size > 0 ? 'primary' : 'default'}
+                variant={warmupSelectedIds.size > 0 ? 'filled' : 'outlined'}
+              />
+            </Box>
+            {warmupSectionOpen ? <ExpandLessIcon /> : <ExpandMoreIcon />}
+          </Box>
+          <Collapse in={warmupSectionOpen}>
+            <Box sx={{ p: 2 }}>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                Start cloud phones, run GeeLark warmup RPA on selected accounts, then stop phones. Results are logged below.
+              </Typography>
+              {accounts.length === 0 ? (
+                <Typography color="text.secondary">No accounts to warm up. Sync from GeeLark first.</Typography>
+              ) : (
+                <>
+                  <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mb: 2 }}>
+                    <FormControlLabel
+                      control={
+                        <Checkbox
+                          checked={accounts.length > 0 && warmupSelectedIds.size === accounts.length}
+                          indeterminate={warmupSelectedIds.size > 0 && warmupSelectedIds.size < accounts.length}
+                          onChange={selectAllWarmup}
+                        />
+                      }
+                      label="Select all"
+                    />
+                    {accounts.map((account) => (
+                      <FormControlLabel
+                        key={account.id}
+                        control={
+                          <Checkbox
+                            checked={warmupSelectedIds.has(account.id)}
+                            onChange={() => toggleWarmupAccount(account.id)}
+                            disabled={warmupRunning}
+                          />
+                        }
+                        label={account.display_name}
+                      />
+                    ))}
+                  </Box>
+                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mb: 2 }}>
+                    <Typography variant="body2" color="text.secondary">
+                      Uses GeeLark task/add warmup (taskType 2): scheduleAt, envId, action, duration in minutes.
+                    </Typography>
+                    <Box sx={{ display: 'flex', gap: 2, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+                      <TextField
+                        size="small"
+                        label="Plan name"
+                        value={warmupPlanName}
+                        onChange={(e) => setWarmupPlanName(e.target.value)}
+                        sx={{ minWidth: 200 }}
+                        disabled={warmupRunning}
+                      />
+                      <TextField
+                        size="small"
+                        select
+                        label="Action"
+                        value={warmupAction}
+                        onChange={(e) => setWarmupAction(e.target.value as 'search profile' | 'search video' | 'browse video')}
+                        SelectProps={{ native: true }}
+                        sx={{ minWidth: 200 }}
+                        disabled={warmupRunning}
+                      >
+                        <option value="browse video">Randomly browse videos</option>
+                        <option value="search video">Search short videos</option>
+                        <option value="search profile">Search personal profile</option>
+                      </TextField>
+                      <TextField
+                        size="small"
+                        label="Keywords"
+                        value={warmupKeywords}
+                        onChange={(e) => setWarmupKeywords(e.target.value)}
+                        placeholder="e.g. anime (required for search)"
+                        sx={{ minWidth: 180 }}
+                        disabled={warmupRunning}
+                        helperText="Required for search actions; optional for browse"
+                      />
+                      <TextField
+                        size="small"
+                        type="number"
+                        label="Duration (minutes)"
+                        value={warmupDurationMinutes}
+                        onChange={(e) => setWarmupDurationMinutes(Math.max(1, parseInt(e.target.value, 10) || 10))}
+                        inputProps={{ min: 1, max: 120 }}
+                        sx={{ width: 130 }}
+                        disabled={warmupRunning}
+                      />
+                    </Box>
+                    <Box sx={{ display: 'flex', gap: 2, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <Button
+                      variant="contained"
+                      startIcon={warmupRunning ? <CircularProgress size={20} color="inherit" /> : <LocalFireDepartmentIcon />}
+                      onClick={runWarmup}
+                      disabled={warmupRunning || warmupSelectedIds.size === 0}
+                    >
+                      {warmupRunning ? 'Running warmup…' : 'Run warmup'}
+                    </Button>
+                    </Box>
+                  </Box>
+                  {warmupLogs.length > 0 && (
+                    <Box sx={{ mt: 2 }}>
+                      <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                        Results
+                      </Typography>
+                      <Stack spacing={1}>
+                        {warmupLogs.map((log) => (
+                          <Box
+                            key={log.accountId}
+                            sx={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: 1,
+                              flexWrap: 'wrap',
+                              p: 1.5,
+                              bgcolor: 'grey.50',
+                              borderRadius: 1,
+                              border: 1,
+                              borderColor: 'divider',
+                            }}
+                          >
+                            <Typography variant="body2" fontWeight="medium">
+                              {log.displayName}
+                            </Typography>
+                            <Chip
+                              size="small"
+                              label={log.status}
+                              color={log.status === 'success' ? 'success' : log.status === 'failed' ? 'error' : 'default'}
+                              variant="outlined"
+                            />
+                            {log.message && (
+                              <Typography variant="caption" color="text.secondary">
+                                {log.message}
+                              </Typography>
+                            )}
+                          </Box>
+                        ))}
+                      </Stack>
+                    </Box>
+                  )}
+                </>
+              )}
+            </Box>
+          </Collapse>
+        </Paper>
 
         <Stack spacing={2}>
           {accounts.map((account) => {

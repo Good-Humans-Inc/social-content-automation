@@ -35,10 +35,9 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: jobError.message }, { status: 500 })
     }
 
-    // Also fetch from post_logs for backwards compatibility
     let logQuery = supabase
-      .from('post_logs')
-      .select('id, template_id, account_id, post_type, status, video_url, created_at, scheduled_time, accounts(display_name), templates(caption)')
+      .from('logs')
+      .select('id, template_id, account_id, type, status, video_url, created_at, scheduled_time, accounts(display_name), templates(caption)')
       .not('video_url', 'is', null)
       .order('created_at', { ascending: false })
       .limit(limit)
@@ -48,9 +47,12 @@ export async function GET(request: NextRequest) {
     }
 
     const { data: logVideos } = await logQuery
+    const logVideosWithPostType = (logVideos || []).map((v: { type?: string; [k: string]: unknown }) => ({
+      ...v,
+      post_type: v.type ?? 'video',
+    }))
 
-    // Merge and deduplicate by video_url
-    const allVideos = [...(jobVideos || []), ...(logVideos || [])]
+    const allVideos = [...(jobVideos || []), ...logVideosWithPostType]
     const seen = new Set<string>()
     const unique = allVideos.filter((v: { video_url?: string }) => {
       if (!v?.video_url || seen.has(v.video_url)) return false

@@ -21,7 +21,7 @@ export default async function Home() {
       supabase.from('templates').select('*', { count: 'exact', head: true }),
       supabase.from('accounts').select('*', { count: 'exact', head: true }),
       supabase
-        .from('post_logs')
+        .from('logs')
         .select('*, accounts(*), templates(*)')
         .order('created_at', { ascending: false })
         .limit(10),
@@ -58,7 +58,7 @@ export default async function Home() {
 
     // Get recent failures
     const failuresResult = await supabase
-      .from('post_logs')
+      .from('logs')
       .select('*, accounts(*), templates(*)')
       .eq('status', 'failed')
       .order('created_at', { ascending: false })

@@ -23,11 +23,12 @@ export async function POST(request: NextRequest) {
     const endOfDay = `${today}T23:59:59.999Z`
 
     const { data: todayLogs } = await supabase
-      .from('post_logs')
-      .select('account_id, status, templates(intensity)')
+      .from('logs')
+      .select('account_id, status, type, templates(intensity)')
       .gte('created_at', startOfDay)
       .lte('created_at', endOfDay)
       .eq('status', 'success')
+      .in('type', ['video', 'slideshow'])
 
     const postsByAccount: Record<string, number> = {}
     for (const log of todayLogs || []) {
