@@ -102,11 +102,13 @@ def _create_image_with_text(
     output_path_normalized = output_path.replace("\\", "/")
 
     # Convert image to video with text overlay
+    # Use -stream_loop -1 for compatibility with all ffmpeg builds (e.g. gyan.dev 8.x)
+    image_path_abs = os.path.abspath(image_path).replace("\\", "/")
     cmd = [
         "ffmpeg",
         "-y",
-        "-loop", "1",
-        "-i", image_path_normalized,
+        "-stream_loop", "-1",
+        "-i", image_path_abs,
         "-vf", text_filter,
         "-t", str(duration),
         "-c:v", "libx264",
@@ -389,9 +391,9 @@ def _create_4_image_grid(
         "-y",
     ]
     
-    # Add all 4 input images
+    # Add all 4 input images (-stream_loop -1 for compatibility with all ffmpeg builds)
     for img_path in normalized_paths:
-        cmd.extend(["-loop", "1", "-i", img_path])
+        cmd.extend(["-stream_loop", "-1", "-i", os.path.abspath(img_path).replace("\\", "/")])
     
     # Add filter and output settings
     cmd.extend([

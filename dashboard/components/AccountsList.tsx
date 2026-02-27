@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { Paper, Box, Typography, Chip, Stack, Button, Alert, CircularProgress, Dialog, DialogTitle, DialogContent, DialogActions, TextField, Slider, IconButton, Collapse, Checkbox, FormControlLabel } from '@mui/material'
+import { Paper, Box, Typography, Chip, Stack, Button, Alert, CircularProgress, Dialog, DialogTitle, DialogContent, DialogActions, TextField, Slider, IconButton, Collapse, Checkbox, FormControlLabel, FormControl, InputLabel, Select, MenuItem } from '@mui/material'
 import RefreshIcon from '@mui/icons-material/Refresh'
 import SyncIcon from '@mui/icons-material/Sync'
 import EditIcon from '@mui/icons-material/Edit'
@@ -10,6 +10,7 @@ import CloseIcon from '@mui/icons-material/Close'
 import LocalFireDepartmentIcon from '@mui/icons-material/LocalFireDepartment'
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
 import ExpandLessIcon from '@mui/icons-material/ExpandLess'
+import ScreenshotMonitorIcon from '@mui/icons-material/ScreenshotMonitor'
 
 interface Account {
   id: string
@@ -78,6 +79,28 @@ export default function AccountsList({ initialAccounts }: AccountsListProps) {
   const [warmupKeywords, setWarmupKeywords] = useState('')
   const [warmupDurationMinutes, setWarmupDurationMinutes] = useState(10)
   const [warmupAction, setWarmupAction] = useState<'search profile' | 'search video' | 'browse video'>('browse video')
+  const [screenshotAccount, setScreenshotAccount] = useState<Account | null>(null)
+  const [screenshotLoading, setScreenshotLoading] = useState(false)
+  const [screenshotImage, setScreenshotImage] = useState<string | null>(null)
+  const [screenshotError, setScreenshotError] = useState<string | null>(null)
+  const [screenshotSteps, setScreenshotSteps] = useState<string[]>([])
+  const [screenshotTaskId, setScreenshotTaskId] = useState<string | null>(null)
+  const [taskFlows, setTaskFlows] = useState<Array<{ id: string; title?: string; desc?: string }>>([])
+  const [taskFlowsLoading, setTaskFlowsLoading] = useState(false)
+  const [profileViewFlowId, setProfileViewFlowId] = useState<string>('')
+
+  useEffect(() => {
+    let cancelled = false
+    setTaskFlowsLoading(true)
+    fetch('/api/geelark/task-flows?pageSize=50')
+      .then((res) => res.json())
+      .then((data) => {
+        if (!cancelled && data?.items) setTaskFlows(data.items)
+      })
+      .catch(() => { if (!cancelled) setTaskFlows([]) })
+      .finally(() => { if (!cancelled) setTaskFlowsLoading(false) })
+    return () => { cancelled = true }
+  }, [])
 
   const startEditing = useCallback((account: Account) => {
     setEditingId(account.id)
@@ -284,14 +307,81 @@ export default function AccountsList({ initialAccounts }: AccountsListProps) {
     }
   }
 
+  const checkLoginScreenshot = useCallback(async (account: Account) => {
+    const phoneId = account.env_id
+    if (!phoneId?.trim()) {
+      setError('Account has no env_id (GeeLark cloud phone ID).')
+      return
+    }
+    setScreenshotAccount(account)
+    setScreenshotLoading(true)
+    setScreenshotImage(null)
+    setScreenshotError(null)
+    setScreenshotSteps([])
+    setScreenshotTaskId(null)
+    try {
+      const res = await fetch('/api/geelark/check-login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          phoneId,
+          fullWorkflow: true,
+          bootWaitSeconds: 30,
+          appWaitSeconds: 5,
+          ...(profileViewFlowId ? { profileViewFlowId } : {}),
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        setScreenshotError(data.error || 'Check login failed')
+        return
+      }
+      setScreenshotSteps(data.steps || [])
+      setScreenshotTaskId(data.taskId || null)
+      const src = data.imageUrl || (data.imageBase64 ? `data:image/png;base64,${data.imageBase64}` : null)
+      setScreenshotImage(src || null)
+      if (!src && !data.taskId) setScreenshotError('No image or taskId returned.')
+      else if (!src) setScreenshotError(null)
+    } catch (err: any) {
+      setScreenshotError(err.message || 'Check login failed')
+    } finally {
+      setScreenshotLoading(false)
+    }
+  }, [profileViewFlowId])
+
+  const closeScreenshotDialog = useCallback(() => {
+    setScreenshotAccount(null)
+    setScreenshotImage(null)
+    setScreenshotError(null)
+    setScreenshotSteps([])
+    setScreenshotTaskId(null)
+  }, [])
+
   return (
     <Paper>
       <Box sx={{ p: 3 }}>
-        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3, flexWrap: 'wrap', gap: 2 }}>
           <Typography variant="h6">
             Accounts ({accounts.length})
           </Typography>
-          <Box sx={{ display: 'flex', gap: 1 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
+            <FormControl size="small" sx={{ minWidth: 220 }}>
+              <InputLabel id="profile-flow-label">Check login → profile flow</InputLabel>
+              <Select
+                labelId="profile-flow-label"
+                value={profileViewFlowId}
+                label="Check login → profile flow"
+                onChange={(e) => setProfileViewFlowId(e.target.value)}
+                disabled={taskFlowsLoading}
+              >
+                <MenuItem value="">None (screenshot For You feed)</MenuItem>
+                {taskFlows.map((f) => (
+                  <MenuItem key={f.id} value={f.id}>
+                    {f.title || f.desc || f.id}
+                  </MenuItem>
+                ))}
+              </Select>
+            </FormControl>
             <Button
               variant="outlined"
               startIcon={loadingPhones ? <CircularProgress size={20} /> : <RefreshIcon />}
@@ -503,9 +593,18 @@ export default function AccountsList({ initialAccounts }: AccountsListProps) {
                     <Chip label={account.persona} size="small" color="primary" />
                     <Box sx={{ flex: 1 }} />
                     {!isEditing && (
-                      <IconButton size="small" onClick={() => startEditing(account)} title="Edit posting settings">
-                        <EditIcon fontSize="small" />
-                      </IconButton>
+                      <>
+                        <IconButton
+                          size="small"
+                          onClick={() => checkLoginScreenshot(account)}
+                          title="Check if TikTok is logged in (screenshot via GeeLark)"
+                        >
+                          <ScreenshotMonitorIcon fontSize="small" />
+                        </IconButton>
+                        <IconButton size="small" onClick={() => startEditing(account)} title="Edit posting settings">
+                          <EditIcon fontSize="small" />
+                        </IconButton>
+                      </>
                     )}
                   </Box>
                   <Stack spacing={0.5}>
@@ -728,6 +827,64 @@ export default function AccountsList({ initialAccounts }: AccountsListProps) {
           >
             {syncing ? 'Syncing...' : 'Sync to Accounts'}
           </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Check login – full workflow (start → boot → open TikTok → screenshot) */}
+      <Dialog open={!!screenshotAccount} onClose={closeScreenshotDialog} maxWidth="sm" fullWidth>
+        <DialogTitle>
+          Check login – {screenshotAccount?.display_name ?? 'Account'}
+        </DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            Starts the cloud phone, opens TikTok, then takes a screenshot so you can verify the account is logged in.
+          </Typography>
+          {screenshotLoading && (
+            <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', py: 4, gap: 2 }}>
+              <CircularProgress />
+              <Typography variant="body2" color="text.secondary">
+                Starting phone → opening TikTok → capturing screenshot…
+              </Typography>
+            </Box>
+          )}
+          {screenshotSteps.length > 0 && !screenshotLoading && (
+            <Stack component="ul" sx={{ pl: 2, mb: 2, '& li': { mb: 0.5 } }}>
+              {screenshotSteps.map((step, i) => (
+                <Typography key={i} component="li" variant="body2" color="text.secondary">
+                  {step}
+                </Typography>
+              ))}
+            </Stack>
+          )}
+          {screenshotError && !screenshotLoading && (
+            <Alert severity="error" sx={{ mb: 2 }}>
+              {screenshotError}
+            </Alert>
+          )}
+          {screenshotTaskId && !screenshotImage && !screenshotLoading && !screenshotError && (
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+              Screenshot requested. Task ID: {screenshotTaskId}. The image may be delivered to your callback URL.
+            </Typography>
+          )}
+          {screenshotImage && !screenshotLoading && (
+            <Box
+              component="img"
+              src={screenshotImage}
+              alt="Cloud phone screenshot – verify TikTok login"
+              sx={{
+                width: '100%',
+                height: 'auto',
+                maxHeight: '70vh',
+                objectFit: 'contain',
+                border: 1,
+                borderColor: 'divider',
+                borderRadius: 1,
+              }}
+            />
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={closeScreenshotDialog}>Close</Button>
         </DialogActions>
       </Dialog>
     </Paper>

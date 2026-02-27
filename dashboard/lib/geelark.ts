@@ -14,11 +14,14 @@ export class GeeLarkClient {
   private apiBase: string
   private apiKey: string
   private appId?: string
+  /** Optional base URL for screenshot/openApp (e.g. https://api.geelark.com). Uses /v1/phone/... paths. */
+  private screenshotApiBase?: string
 
-  constructor(apiBase: string, apiKey: string, appId?: string) {
+  constructor(apiBase: string, apiKey: string, appId?: string, screenshotApiBase?: string) {
     this.apiBase = apiBase.replace(/\/$/, '')
     this.apiKey = apiKey
     this.appId = appId
+    this.screenshotApiBase = screenshotApiBase?.replace(/\/$/, '')
   }
 
   private generateTraceId(): string {
@@ -624,6 +627,234 @@ export class GeeLarkClient {
       logs?: string[]
       searchAfter?: unknown
       logContinue?: boolean
+    }
+  }
+
+  /**
+   * Request a screenshot from the cloud phone (GeeLark screenShot API).
+   * POST https://openapi.geelark.com/open/v1/phone/screenShot with body { id }.
+   * Returns taskId; the image may be delivered via callback or available via task/detail.
+   */
+  async getPhoneScreenshot(phoneId: string): Promise<{ taskId: string }> {
+    if (!phoneId?.trim()) {
+      throw new GeeLarkError('id (cloud phone id) is required for screenShot', undefined, 400)
+    }
+    const headers = await this.getHeaders()
+    const response = await fetch(`${this.apiBase}/open/v1/phone/screenShot`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ id: phoneId.trim() }),
+    })
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok) {
+      throw new GeeLarkError(
+        data.msg || `Failed to get screenshot: ${response.statusText}`,
+        data.code,
+        response.status
+      )
+    }
+    if (data.code !== 0 && data.code !== undefined) {
+      throw new GeeLarkError(
+        data.msg || 'GeeLark API error',
+        data.code,
+        response.status
+      )
+    }
+    const taskId = data.data?.taskId
+    if (!taskId) {
+      throw new GeeLarkError('No taskId in screenShot response', data.code, response.status)
+    }
+    return { taskId }
+  }
+
+  /**
+   * Get screenshot result. POST /open/v1/phone/screenShot/result with { taskId }.
+   * status: 0 = acquisition failed, 1 = in progress, 2 = success, 3 = execution failed.
+   * Result available within 30 minutes after requesting the screenshot.
+   */
+  async getScreenShotResult(taskId: string): Promise<{ status: number; downloadLink?: string }> {
+    if (!taskId?.trim()) {
+      throw new GeeLarkError('taskId is required for screenShot/result', undefined, 400)
+    }
+    const headers = await this.getHeaders()
+    const response = await fetch(`${this.apiBase}/open/v1/phone/screenShot/result`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ taskId: taskId.trim() }),
+    })
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok) {
+      throw new GeeLarkError(
+        data.msg || `Failed to get screenshot result: ${response.statusText}`,
+        data.code,
+        response.status
+      )
+    }
+    if (data.code !== 0 && data.code !== undefined) {
+      throw new GeeLarkError(
+        data.msg || 'GeeLark API error',
+        data.code,
+        response.status
+      )
+    }
+    const d = data.data || {}
+    return {
+      status: d.status ?? -1,
+      downloadLink: d.downloadLink,
+    }
+  }
+
+  /** TikTok package name on Android (GeeLark cloud phones). */
+  static readonly TIKTOK_PACKAGE = 'com.zhiliaoapp.musically'
+
+  /**
+   * List RPA task flows (e.g. to get flowId for "view profile" flow).
+   * POST /open/v1/task/flow/list
+   */
+  async listTaskFlows(page: number = 1, pageSize: number = 20): Promise<{
+    total: number
+    page: number
+    pageSize: number
+    items: Array<{ id: string; title?: string; desc?: string; params?: string[] }>
+  }> {
+    const headers = await this.getHeaders()
+    const response = await fetch(`${this.apiBase}/open/v1/task/flow/list`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ page: Math.max(1, page), pageSize: Math.min(100, Math.max(1, pageSize)) }),
+    })
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok) {
+      throw new GeeLarkError(
+        data.msg || `Failed to list task flows: ${response.statusText}`,
+        data.code,
+        response.status
+      )
+    }
+    if (data.code !== 0 && data.code !== undefined) {
+      throw new GeeLarkError(
+        data.msg || 'GeeLark API error',
+        data.code,
+        response.status
+      )
+    }
+    const d = data.data || {}
+    return {
+      total: d.total ?? 0,
+      page: d.page ?? page,
+      pageSize: d.pageSize ?? pageSize,
+      items: Array.isArray(d.items) ? d.items : [],
+    }
+  }
+
+  /**
+   * Create custom task – run an RPA task flow on a cloud phone.
+   * Get flowId from Task flow query API first. Use for e.g. open TikTok + click "Profile", then take screenshot.
+   * POST /open/v1/task/rpa/add – name (≤128 chars), remark (≤200), scheduleAt (required), id (cloud phone ID), flowId (required), paramMap (optional; file-type params use array values).
+   */
+  async addRpaTask(
+    envId: string,
+    flowId: string,
+    options?: { name?: string; remark?: string; paramMap?: Record<string, unknown> }
+  ): Promise<string> {
+    if (!envId?.trim()) throw new GeeLarkError('envId is required for RPA task', undefined, 400)
+    if (!flowId?.trim()) throw new GeeLarkError('flowId is required for RPA task', undefined, 400)
+    const scheduleAt = Math.floor(Date.now() / 1000)
+    const body: Record<string, unknown> = {
+      scheduleAt,
+      id: envId.trim(),
+      flowId: flowId.trim(),
+    }
+    if (options?.name) body.name = options.name
+    if (options?.remark) body.remark = options.remark
+    if (options?.paramMap && Object.keys(options.paramMap).length > 0) body.paramMap = options.paramMap
+
+    const headers = await this.getHeaders()
+    const response = await fetch(`${this.apiBase}/open/v1/task/rpa/add`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+    })
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok) {
+      throw new GeeLarkError(
+        data.msg || `Failed to add RPA task: ${response.statusText}`,
+        data.code,
+        response.status
+      )
+    }
+    if (data.code !== 0 && data.code !== undefined) {
+      throw new GeeLarkError(
+        data.msg || 'GeeLark API error',
+        data.code,
+        response.status
+      )
+    }
+    const taskId = data.data?.taskId
+    if (!taskId) throw new GeeLarkError('No taskId in RPA task response', data.code, response.status)
+    return taskId
+  }
+
+  /**
+   * Simulate a tap at (x, y) on the cloud phone screen.
+   * POST /open/v1/phone/tap – not present in GeeLark OpenAPI (returns 404). Kept for use if they add it or you have a different base.
+   * For profile screens use GeeLark's TikTok APIs (e.g. TikTok profile edit / TikTok login) when available via API.
+   */
+  async tap(envId: string, x: number, y: number): Promise<void> {
+    if (!envId?.trim()) {
+      throw new GeeLarkError('envId is required for tap', undefined, 400)
+    }
+    const headers = await this.getHeaders()
+    const response = await fetch(`${this.apiBase}/open/v1/phone/tap`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ id: envId.trim(), x: Math.round(x), y: Math.round(y) }),
+    })
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok) {
+      throw new GeeLarkError(
+        data.msg || `Failed to tap: ${response.statusText}`,
+        data.code,
+        response.status
+      )
+    }
+    if (data.code !== 0 && data.code !== undefined) {
+      throw new GeeLarkError(
+        data.msg || 'GeeLark API error',
+        data.code,
+        response.status
+      )
+    }
+  }
+
+  /**
+   * Start an app on the cloud phone. POST /open/v1/app/start with { envId, packageName }.
+   * Either appVersionId or packageName must be provided.
+   */
+  async startApp(envId: string, packageName: string = GeeLarkClient.TIKTOK_PACKAGE): Promise<void> {
+    if (!envId?.trim()) {
+      throw new GeeLarkError('envId is required for app/start', undefined, 400)
+    }
+    const headers = await this.getHeaders()
+    const response = await fetch(`${this.apiBase}/open/v1/app/start`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ envId: envId.trim(), packageName: packageName.trim() }),
+    })
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok) {
+      throw new GeeLarkError(
+        data.msg || `Failed to start app: ${response.statusText}`,
+        data.code,
+        response.status
+      )
+    }
+    if (data.code !== 0 && data.code !== undefined) {
+      throw new GeeLarkError(
+        data.msg || 'GeeLark API error',
+        data.code,
+        response.status
+      )
     }
   }
 

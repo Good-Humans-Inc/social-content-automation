@@ -96,8 +96,8 @@ $$ LANGUAGE plpgsql SECURITY DEFINER;
 -- Email: admin@geelark.local
 -- Password: admin123
 SELECT create_user_with_password(
-  'admin@geelark.local',
-  'admin123',
+  'babymilu@geelark.com',
+  'BabyMilu2026!',
   'Admin User'
 );
 

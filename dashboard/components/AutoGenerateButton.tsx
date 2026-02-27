@@ -1,0 +1,159 @@
+'use client'
+
+import { useState } from 'react'
+import {
+  Button,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  FormControl,
+  InputLabel,
+  Select,
+  MenuItem,
+  Box,
+  Typography,
+  Alert,
+  CircularProgress,
+} from '@mui/material'
+import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome'
+
+interface AutoGenerateButtonProps {
+  onSuccess?: () => void
+}
+
+// Fandom options for auto-generate (value = assets category sent to API)
+const FANDOM_OPTIONS: { value: string; label: string }[] = [
+  { value: 'jjk', label: 'Jujutsu Kaisen (JJK)' },
+  { value: 'lads', label: 'Love and Deepspace (LADS)' },
+  { value: 'genshin', label: 'Genshin Impact' },
+  { value: 'generic_anime', label: 'Generic Anime' },
+]
+
+export default function AutoGenerateButton({ onSuccess }: AutoGenerateButtonProps) {
+  const [open, setOpen] = useState(false)
+  const [fandom, setFandom] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [result, setResult] = useState<{ created: number; accountsUsed?: number; errors?: string[] } | null>(null)
+
+  const handleGenerate = async () => {
+    if (!fandom) {
+      setError('Please select a fandom')
+      return
+    }
+    setLoading(true)
+    setError(null)
+    setResult(null)
+    try {
+      const res = await fetch('/api/jobs/auto-generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fandom }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        setError(data.error || 'Auto-generate failed')
+        return
+      }
+      setResult({
+        created: data.created?.length ?? 0,
+        accountsUsed: data.accountsUsed,
+        errors: data.errors,
+      })
+      if (data.created?.length) {
+        onSuccess?.()
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Request failed')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleClose = () => {
+    setOpen(false)
+    setResult(null)
+    setError(null)
+  }
+
+  return (
+    <>
+      <Button
+        onClick={() => setOpen(true)}
+        variant="outlined"
+        color="primary"
+        startIcon={<AutoAwesomeIcon />}
+      >
+        Auto Generate
+      </Button>
+
+      <Dialog open={open} onClose={handleClose} maxWidth="sm" fullWidth>
+        <DialogTitle>Auto Generate Videos</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            Creates one video job for every unused template in the selected fandom. Jobs are
+            distributed evenly across all accounts (1–2 per account) so each account has videos
+            ready for daily upload. Character images are chosen from tags (e.g. #inumaki, #miwa);
+            templates whose character isn&apos;t scraped yet are skipped and listed below.
+          </Typography>
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: 1 }}>
+            <FormControl fullWidth required>
+              <InputLabel>Fandom</InputLabel>
+              <Select
+                value={fandom}
+                onChange={(e) => setFandom(e.target.value)}
+                label="Fandom"
+              >
+                {FANDOM_OPTIONS.map((opt) => (
+                  <MenuItem key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+            {error && (
+              <Alert severity="error" onClose={() => setError(null)}>
+                {error}
+              </Alert>
+            )}
+            {result && (
+              <Alert severity={result.created > 0 ? 'success' : 'info'}>
+                {result.created > 0
+                  ? `Created ${result.created} video job(s) across ${result.accountsUsed ?? '?'} account(s) (1–2 per account for daily upload).`
+                  : 'No jobs were created.'}
+                {result.errors?.length ? (
+                  <Box component="ul" sx={{ mt: 1, pl: 2, mb: 0 }}>
+                    {result.errors.slice(0, 5).map((msg, i) => (
+                      <li key={i}>
+                        <Typography variant="body2">{msg}</Typography>
+                      </li>
+                    ))}
+                    {result.errors.length > 5 && (
+                      <li>
+                        <Typography variant="body2">
+                          … and {result.errors.length - 5} more
+                        </Typography>
+                      </li>
+                    )}
+                  </Box>
+                ) : null}
+              </Alert>
+            )}
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handleClose}>Cancel</Button>
+          <Button
+            onClick={handleGenerate}
+            variant="contained"
+            disabled={loading || !fandom}
+            startIcon={loading ? <CircularProgress size={16} /> : null}
+          >
+            {loading ? 'Generating…' : 'Generate'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+    </>
+  )
+}

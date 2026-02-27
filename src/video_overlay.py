@@ -427,11 +427,13 @@ def create_video_from_images(
                         filtergraph = ",".join(div_filters) + f",{scale_filter},{pad_filter},{even_dim_filter},{text_filter}"
 
                 # Create short video from image with text overlay
+                # Use -stream_loop -1 (not -loop 1) for compatibility with all ffmpeg builds (e.g. gyan.dev 8.x)
+                img_abs = os.path.abspath(img_path).replace("\\", "/")
                 cmd = [
                     "ffmpeg",
                     "-y",
-                    "-loop", "1",
-                    "-i", img_path,
+                    "-stream_loop", "-1",
+                    "-i", img_abs,
                     "-vf", filtergraph,
                     "-t", str(rapid_duration),  # Very short duration for rapid changes
                     "-c:v", "libx264",
@@ -564,11 +566,13 @@ def create_video_from_images(
                 filtergraph = f"{scale_filter},{pad_filter},{even_dim_filter},{text_filter}"
             
             # Create video from image with text overlay
+            # Use -stream_loop -1 for compatibility with all ffmpeg builds
+            img_abs = os.path.abspath(img_path).replace("\\", "/")
             cmd = [
                 "ffmpeg",
                 "-y",
-                "-loop", "1",
-                "-i", img_path,
+                "-stream_loop", "-1",
+                "-i", img_abs,
                 "-vf", filtergraph,
                 "-t", str(image_duration),
                 "-c:v", "libx264",
@@ -744,7 +748,7 @@ def _render_type_a(
 
     with tempfile.TemporaryDirectory() as tmpdir:
         filters: List[str] = []
-        input_args = ["-loop", "1", "-i", image_path.replace("\\", "/")]
+        input_args = ["-stream_loop", "-1", "-i", os.path.abspath(image_path).replace("\\", "/")]
 
         ken_burns = diversification.get("ken_burns", False)
         if ken_burns:
@@ -803,7 +807,7 @@ def _render_type_b(
 
     with tempfile.TemporaryDirectory() as tmpdir:
         filters: List[str] = []
-        input_args = ["-loop", "1", "-i", image_path.replace("\\", "/")]
+        input_args = ["-stream_loop", "-1", "-i", os.path.abspath(image_path).replace("\\", "/")]
 
         filters.append(f"scale={W}:{H}:force_original_aspect_ratio=decrease")
         filters.append(f"pad={W}:{H}:(ow-iw)/2:(oh-ih)/2:color=black")

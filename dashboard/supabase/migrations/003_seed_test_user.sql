@@ -69,8 +69,8 @@ $$ LANGUAGE plpgsql SECURITY DEFINER;
 -- Email: admin@geelark.local
 -- Password: admin123
 SELECT create_test_user(
-  'admin@geelark.local',
-  'admin123',
+  'babymilu@geelark.local',
+  'BabyMilu2026!',
   'Admin User'
 );
 

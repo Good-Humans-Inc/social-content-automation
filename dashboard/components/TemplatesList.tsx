@@ -11,9 +11,11 @@ import {
   Dialog,
   Button,
   Alert,
+  Tooltip,
 } from '@mui/material'
 import EditIcon from '@mui/icons-material/Edit'
 import DeleteIcon from '@mui/icons-material/Delete'
+import ReplayIcon from '@mui/icons-material/Replay'
 import TemplateCreateForm, { Template } from './TemplateCreateForm'
 
 // Template interface is now imported from TemplateCreateForm
@@ -31,6 +33,7 @@ export default function TemplatesList({ initialTemplates, onDeleteSuccess }: Tem
   const [templates, setTemplates] = useState(initialTemplates)
   const [editingTemplate, setEditingTemplate] = useState<TemplateWithMetadata | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [clearingUsedId, setClearingUsedId] = useState<string | null>(null)
 
   useEffect(() => {
     setTemplates(initialTemplates)
@@ -38,6 +41,30 @@ export default function TemplatesList({ initialTemplates, onDeleteSuccess }: Tem
 
   const handleEdit = (template: TemplateWithMetadata) => {
     setEditingTemplate(template)
+  }
+
+  const handleClearUsed = async (template: TemplateWithMetadata) => {
+    setClearingUsedId(template.id)
+    setError(null)
+    try {
+      const response = await fetch('/api/templates', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: template.id, used: null }),
+      })
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.error || 'Failed to clear used')
+      }
+      setTemplates((prev) =>
+        prev.map((t) => (t.id === template.id ? { ...t, used: null } : t))
+      )
+      if (onDeleteSuccess) onDeleteSuccess()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to clear used')
+    } finally {
+      setClearingUsedId(null)
+    }
   }
 
   const handleDelete = async (template: TemplateWithMetadata) => {
@@ -121,11 +148,25 @@ export default function TemplatesList({ initialTemplates, onDeleteSuccess }: Tem
                           />
                         )}
                       </Box>
-                      <Box>
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0 }}>
+                        {template.used && (
+                          <Tooltip title="Mark unused (allow auto-generate to use this template again)">
+                            <IconButton
+                              size="small"
+                              onClick={() => handleClearUsed(template)}
+                              disabled={clearingUsedId === template.id}
+                              color="default"
+                              aria-label="Mark unused"
+                            >
+                              <ReplayIcon fontSize="small" />
+                            </IconButton>
+                          </Tooltip>
+                        )}
                         <IconButton
                           size="small"
                           onClick={() => handleEdit(template)}
                           color="primary"
+                          aria-label="Edit"
                         >
                           <EditIcon />
                         </IconButton>
@@ -133,6 +174,7 @@ export default function TemplatesList({ initialTemplates, onDeleteSuccess }: Tem
                           size="small"
                           onClick={() => handleDelete(template)}
                           color="error"
+                          aria-label="Delete"
                         >
                           <DeleteIcon />
                         </IconButton>

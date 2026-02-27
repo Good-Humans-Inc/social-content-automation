@@ -4,9 +4,27 @@ from typing import Optional
 from supabase import create_client, Client
 from dotenv import load_dotenv
 
-# Load .env file from project root
-env_path = Path(__file__).parent.parent / ".env"
-load_dotenv(env_path)
+# Load .env: try project root first, then dashboard (so worker can use same credentials as Next.js)
+_root = Path(__file__).parent.parent
+_env_paths = [
+    _root / ".env",
+    _root / ".env.local",
+    _root / "dashboard" / ".env",
+    _root / "dashboard" / ".env.local",
+]
+for _p in _env_paths:
+    if _p.exists():
+        load_dotenv(_p)
+        break
+
+# If dashboard env was loaded, map Next.js-style vars to worker-style (worker expects SUPABASE_URL, not NEXT_PUBLIC_*)
+if not os.getenv("SUPABASE_URL") and os.getenv("NEXT_PUBLIC_SUPABASE_URL"):
+    os.environ["SUPABASE_URL"] = os.environ["NEXT_PUBLIC_SUPABASE_URL"]
+if not os.getenv("SUPABASE_SERVICE_ROLE_KEY") and not os.getenv("SUPABASE_ANON_KEY"):
+    if os.getenv("SUPABASE_SERVICE_ROLE_KEY"):
+        pass  # already set
+    elif os.getenv("NEXT_PUBLIC_SUPABASE_ANON_KEY"):
+        os.environ["SUPABASE_ANON_KEY"] = os.environ["NEXT_PUBLIC_SUPABASE_ANON_KEY"]
 
 
 def get_supabase_client() -> Optional[Client]:

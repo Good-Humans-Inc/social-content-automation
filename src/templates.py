@@ -16,12 +16,17 @@ class UsedMeta:
     cloud_phone_id: str
 
     @classmethod
-    def from_dict(cls, data: Dict[str, str]) -> "UsedMeta":
+    def from_dict(cls, data: Dict) -> "UsedMeta":
+        # Dashboard auto-generate uses used_at, job_id, character; legacy uses timestamp, account_display_name, cloud_phone_id
+        timestamp = data.get("timestamp") or data.get("used_at") or ""
+        account_id = data.get("account_id") or ""
+        account_display_name = data.get("account_display_name") or data.get("character") or ""
+        cloud_phone_id = data.get("cloud_phone_id") or ""
         return cls(
-            timestamp=data["timestamp"],
-            account_id=data["account_id"],
-            account_display_name=data["account_display_name"],
-            cloud_phone_id=data["cloud_phone_id"],
+            timestamp=timestamp,
+            account_id=account_id,
+            account_display_name=account_display_name,
+            cloud_phone_id=cloud_phone_id,
         )
 
     def to_dict(self) -> Dict[str, str]:
