@@ -54,16 +54,19 @@ export async function GET(request: NextRequest) {
 
     const allVideos = [...(jobVideos || []), ...logVideosWithPostType]
     const seen = new Set<string>()
-    const unique = allVideos.filter((v: { video_url?: string }) => {
-      if (!v?.video_url || seen.has(v.video_url)) return false
-      seen.add(v.video_url)
+    const unique = allVideos.filter((v: (typeof allVideos)[number]) => {
+      const url = v && 'video_url' in v ? v.video_url : undefined
+      if (!url || seen.has(url)) return false
+      seen.add(url)
       return true
     })
 
-    // Sort by created_at descending
-    unique.sort((a: { created_at?: string }, b: { created_at?: string }) =>
-      new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime()
-    )
+    // Sort by created_at descending (use 'in' check since union type may not have created_at)
+    unique.sort((a, b) => {
+      const aTime = 'created_at' in a && a.created_at ? new Date(a.created_at).getTime() : 0
+      const bTime = 'created_at' in b && b.created_at ? new Date(b.created_at).getTime() : 0
+      return bTime - aTime
+    })
 
     return NextResponse.json(unique.slice(0, limit))
   } catch (error: any) {

@@ -4,13 +4,11 @@ import { NextRequest, NextResponse } from 'next/server'
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: Promise<{ id: string }> | { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const supabase = await createClient()
-    // Handle both Promise and direct params (for Next.js version compatibility)
-    const resolvedParams = params instanceof Promise ? await params : params
-    const { id } = resolvedParams
+    const { id } = await params
 
     const { data, error } = await supabase
       .from('video_jobs')
@@ -41,18 +39,16 @@ export async function GET(
 
 export async function PATCH(
   request: NextRequest,
-  { params }: { params: Promise<{ id: string }> | { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const supabase = await createClient()
-    // Handle both Promise and direct params (for Next.js version compatibility)
-    const resolvedParams = params instanceof Promise ? await params : params
-    const { id } = resolvedParams
+    const { id } = await params
     const body = await request.json()
 
     // Validate job ID
     if (!id || typeof id !== 'string' || id.trim() === '' || id === 'undefined' || id === 'null') {
-      console.error('Invalid job ID received:', { id, type: typeof id, params: resolvedParams })
+      console.error('Invalid job ID received:', { id, type: typeof id })
       return NextResponse.json({ error: 'Invalid job ID', details: `Received: ${id}` }, { status: 400 })
     }
 
@@ -123,14 +119,12 @@ export async function PATCH(
 
 export async function DELETE(
   request: NextRequest,
-  { params }: { params: Promise<{ id: string }> | { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const supabase = await createClient()
     const adminSupabase = createAdminClient()
-    // Handle both Promise and direct params (for Next.js version compatibility)
-    const resolvedParams = params instanceof Promise ? await params : params
-    const { id } = resolvedParams
+    const { id } = await params
 
     // Fetch the job to get video_url and account_id before deletion
     const { data: job, error: fetchError } = await supabase
