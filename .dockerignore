@@ -1,0 +1,49 @@
+# Git and IDE
+.git
+.gitignore
+.cursor
+.vscode
+*.code-workspace
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.venv
+venv
+env
+.env
+.env.*
+!.env.example
+
+# Build and cache
+*.egg-info
+.eggs
+dist
+build
+*.egg
+
+# Project-specific: don't copy local data into the image
+output
+assets
+input
+dashboard
+.next
+node_modules
+
+# Docs and dev (optional; remove if you want them in the image)
+docs
+*.md
+!README.md
+
+# Tests (optional)
+.pytest_cache
+.coverage
+htmlcov
+tests
+
+# Misc
+*.log
+.DS_Store
+Thumbs.db

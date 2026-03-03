@@ -2,7 +2,7 @@ import os
 import shutil
 import subprocess
 import tempfile
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Callable
 
 from src.text_overlay import OverlayOptions, wrap_text
 
@@ -335,10 +335,15 @@ def create_video_from_images(
     diversification: Optional[Dict[str, Any]] = None,
     rapid_mode: bool = False,
     audio_path: Optional[str] = None,
+    progress_callback: Optional[Callable[[int, int], None]] = None,
 ) -> None:
     """
     Create a video from multiple images with text overlay in the middle.
-    
+
+    Uses -stream_loop -1 (not -loop 1) for image input; FFmpeg 6+ removed the
+    image2 -loop option. If you see "Option loop not found", ensure the job
+    worker is running the latest code and restart it.
+
     Args:
         image_paths: List of image file paths to convert to video
         output_path: Output video file path
@@ -348,6 +353,7 @@ def create_video_from_images(
         transition_duration: Duration of transition between images (0 = no transition)
         diversification: Optional diversification parameters
         rapid_mode: If True, images change rapidly (0.2s each) with static text overlay
+        progress_callback: Optional callback(slides_done, total_slides) during slide creation
     """
     _ensure_ffmpeg_available()
     
@@ -459,6 +465,8 @@ def create_video_from_images(
                         errors='replace'
                     )
                     slide_videos.append(slide_video)
+                    if progress_callback:
+                        progress_callback(i + 1, num_images)
                 except subprocess.CalledProcessError as e:
                     stderr_output = e.stderr if isinstance(e.stderr, str) else (e.stderr.decode('utf-8', errors='replace') if e.stderr else "")
                     error_msg = f"ffmpeg failed creating rapid slide {i+1} with code {e.returncode}"
@@ -598,6 +606,8 @@ def create_video_from_images(
                     errors='replace'
                 )
                 slide_videos.append(slide_video)
+                if progress_callback:
+                    progress_callback(i + 1, num_images)
             except subprocess.CalledProcessError as e:
                 stderr_output = e.stderr if isinstance(e.stderr, str) else (e.stderr.decode('utf-8', errors='replace') if e.stderr else "")
                 error_msg = f"ffmpeg failed creating slide {i+1} with code {e.returncode}"

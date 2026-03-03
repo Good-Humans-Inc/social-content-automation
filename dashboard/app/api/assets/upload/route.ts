@@ -2,6 +2,7 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { NextRequest, NextResponse } from 'next/server'
 import sharp from 'sharp'
 import { createHash } from 'crypto'
+import { uploadToGcs, isGcsConfigured, getGcsBucketImages } from '@/lib/gcs'
 
 // Search query mapping (matches Python implementation)
 const SEARCH_QUERY_MAP: Record<string, { category: string; subcategories: string[] }> = {
@@ -471,19 +472,37 @@ export async function POST(request: NextRequest) {
     // Organize by category/subcategory: assets/{category}/{subcategory}/filename.ext
     const filePath = `assets/${sanitizedCategory}/${sanitizedSubcategory}/${fileName}`
 
-    const { data: uploadData, error: uploadError } = await supabase.storage
-      .from('assets')
-      .upload(filePath, file, {
-        cacheControl: '3600',
-        upsert: false,
-      })
+    let publicUrl: string
 
-    if (uploadError) {
-      return NextResponse.json({ error: uploadError.message }, { status: 500 })
+    if (isGcsConfigured() && getGcsBucketImages()) {
+      // Upload to GCS (babymilu-images)
+      const arrayBuffer = await file.arrayBuffer()
+      const buffer = Buffer.from(arrayBuffer)
+      const contentType = file.type || `image/${fileExt}`
+      try {
+        publicUrl = await uploadToGcs(getGcsBucketImages(), filePath, buffer, contentType)
+      } catch (gcsErr) {
+        console.error('GCS upload failed, falling back to Supabase:', gcsErr)
+        const { error: uploadError } = await supabase.storage
+          .from('assets')
+          .upload(filePath, buffer, { cacheControl: '3600', upsert: false, contentType })
+        if (uploadError) return NextResponse.json({ error: uploadError.message }, { status: 500 })
+        const { data: urlData } = supabase.storage.from('assets').getPublicUrl(filePath)
+        publicUrl = urlData.publicUrl
+      }
+    } else {
+      const { data: uploadData, error: uploadError } = await supabase.storage
+        .from('assets')
+        .upload(filePath, file, {
+          cacheControl: '3600',
+          upsert: false,
+        })
+      if (uploadError) {
+        return NextResponse.json({ error: uploadError.message }, { status: 500 })
+      }
+      const { data: urlData } = supabase.storage.from('assets').getPublicUrl(filePath)
+      publicUrl = urlData.publicUrl
     }
-
-    // Get public URL
-    const { data: urlData } = supabase.storage.from('assets').getPublicUrl(filePath)
 
     // Update metadata with processed image information
     const enrichedMetadata = {
@@ -502,7 +521,7 @@ export async function POST(request: NextRequest) {
     const { data: assetData, error: dbError } = await supabase
       .from('assets')
       .insert({
-        url: urlData.publicUrl,
+        url: publicUrl,
         storage_path: filePath,
         fandom,
         tags,

@@ -19,7 +19,7 @@ from src.db_config import generate_config
 from src.retry import retry_with_backoff
 from src.scheduler import get_scheduled_time
 from src.supabase_client import ensure_supabase_client
-from src.video_storage import upload_video_to_supabase
+from src.video_storage import upload_video
 from src.job_worker import run_worker
 
 
@@ -432,7 +432,7 @@ def autopost(
                 # Upload video to Supabase Storage for temporary storage and viewing
                 video_url = None
                 if post.video_path and os.path.exists(post.video_path):
-                    video_url = upload_video_to_supabase(
+                    video_url = upload_video(
                         video_path=post.video_path,
                         account_id=post.account.id,
                         template_id=post.template.id,
@@ -915,7 +915,7 @@ def run_daily(
                     account.id, cfg.posting.schedule_in_minutes
                 )
 
-                video_url = upload_video_to_supabase(
+                video_url = upload_video(
                     output_video, account.id, template.id
                 )
 

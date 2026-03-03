@@ -1,5 +1,6 @@
 import { createAdminClient } from '@/lib/supabase/admin'
 import { NextRequest, NextResponse } from 'next/server'
+import { uploadToGcs, isGcsConfigured, getGcsBucketMusic } from '@/lib/gcs'
 
 // Supported music tags for automatic extraction
 const MUSIC_TAGS = ['japan', 'anime', 'edm', 'phonk', 'lofi', 'trap', 'piano']
@@ -43,43 +44,57 @@ export async function POST(request: NextRequest) {
     const filename = file.name.replace(/\.[^/.]+$/, '') // Remove extension
     const extractedTags = extractTagsFromFilename(filename)
 
-    // Upload to Supabase Storage (music bucket)
     const fileExt = file.name.split('.').pop()
     const fileName = `${Date.now()}-${file.name}`
-    const storagePath = fileName // Store directly in music bucket root
+    const storagePath = fileName
+    const fullStoragePath = `music/${storagePath}`
 
-    // Convert File to ArrayBuffer for upload
     const arrayBuffer = await file.arrayBuffer()
     const buffer = Buffer.from(arrayBuffer)
+    const contentType = `audio/${fileExt}`
 
-    const { error: uploadError } = await supabase.storage
-      .from('music')
-      .upload(storagePath, buffer, {
-        contentType: `audio/${fileExt}`,
-        upsert: false,
-      })
+    let publicUrl: string
 
-    if (uploadError) {
-      console.error(`Error uploading file ${file.name}:`, uploadError)
-      return NextResponse.json(
-        { error: `Failed to upload file: ${uploadError.message}` },
-        { status: 500 }
-      )
+    if (isGcsConfigured() && getGcsBucketMusic()) {
+      try {
+        publicUrl = await uploadToGcs(getGcsBucketMusic(), fullStoragePath, buffer, contentType)
+      } catch (gcsErr) {
+        console.error('GCS upload failed, falling back to Supabase:', gcsErr)
+        const { error: uploadError } = await supabase.storage
+          .from('music')
+          .upload(storagePath, buffer, { contentType, upsert: false })
+        if (uploadError) {
+          return NextResponse.json(
+            { error: `Failed to upload file: ${uploadError.message}` },
+            { status: 500 }
+          )
+        }
+        const { data: urlData } = supabase.storage.from('music').getPublicUrl(storagePath)
+        publicUrl = urlData.publicUrl
+      }
+    } else {
+      const { error: uploadError } = await supabase.storage
+        .from('music')
+        .upload(storagePath, buffer, {
+          contentType,
+          upsert: false,
+        })
+      if (uploadError) {
+        console.error(`Error uploading file ${file.name}:`, uploadError)
+        return NextResponse.json(
+          { error: `Failed to upload file: ${uploadError.message}` },
+          { status: 500 }
+        )
+      }
+      const { data: urlData } = supabase.storage.from('music').getPublicUrl(storagePath)
+      publicUrl = urlData.publicUrl
     }
 
-    // Get public URL from music bucket
-    const { data: urlData } = supabase.storage
-      .from('music')
-      .getPublicUrl(storagePath)
-
-    // Create asset record in database
-    // Store full path with bucket prefix for clarity: 'music/filename'
-    const fullStoragePath = `music/${storagePath}`
     const { data: assetData, error: dbError } = await supabase
       .from('assets')
       .insert({
-        url: urlData.publicUrl,
-        storage_path: fullStoragePath, // Store as 'music/filename' for reference
+        url: publicUrl,
+        storage_path: fullStoragePath,
         category: 'music',
         tags: extractedTags,
         metadata: {

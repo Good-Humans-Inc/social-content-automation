@@ -2,13 +2,14 @@
 
 import logging
 import os
+import shutil
 import time
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 
 from src.supabase_client import ensure_supabase_client
 from src.templates import Template, TemplateLibrary
-from src.video_storage import upload_video_to_supabase
+from src.video_storage import upload_video
 from src.text_overlay import OverlayOptions
 
 logger = logging.getLogger(__name__)
@@ -105,8 +106,27 @@ def claim_job(job_id: str) -> bool:
         return False
 
 
+# GCS bucket names for assets (env overrides: GCS_BUCKET_IMAGES, GCS_BUCKET_MUSIC, GCS_BUCKET_VIDEOS)
+_GCS_BUCKET_IMAGES = os.environ.get("GCS_BUCKET_IMAGES", "babymilu-images")
+_GCS_BUCKET_MUSIC = os.environ.get("GCS_BUCKET_MUSIC", "babymilu-musics")
+_GCS_BUCKET_VIDEOS = os.environ.get("GCS_BUCKET_VIDEOS", "babymilu-videos")
+
+
+def _gcs_bucket_for_storage_path(storage_path: str) -> Optional[str]:
+    """Return GCS bucket name for a given storage_path prefix, or None."""
+    if not storage_path:
+        return _GCS_BUCKET_IMAGES
+    if storage_path.startswith("music/"):
+        return _GCS_BUCKET_MUSIC
+    if storage_path.startswith("videos/"):
+        return _GCS_BUCKET_VIDEOS
+    if storage_path.startswith("assets/") or storage_path.startswith("images/"):
+        return _GCS_BUCKET_IMAGES
+    return _GCS_BUCKET_IMAGES
+
+
 def download_asset(asset_id: str, output_path: str) -> bool:
-    """Download an asset from Supabase Storage to local path."""
+    """Download an asset from local path, GCS (babymilu-* buckets), or Supabase Storage."""
     supabase = ensure_supabase_client()
     if not supabase:
         return False
@@ -121,7 +141,48 @@ def download_asset(asset_id: str, output_path: str) -> bool:
         storage_path = asset_data.get("storage_path")
         url = asset_data.get("url")
 
-        # Try to download from storage_path first
+        # If LOCAL_ASSETS_DIR is set, try to use the file from local disk first
+        local_base = os.environ.get("LOCAL_ASSETS_DIR")
+        if local_base and storage_path:
+            local_base = os.path.abspath(local_base)
+            # Build path under base; prevent path traversal
+            candidate = os.path.normpath(os.path.join(local_base, storage_path))
+            if os.path.abspath(candidate).startswith(local_base) and os.path.isfile(candidate):
+                Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(candidate, output_path)
+                logger.debug("Used local asset: %s -> %s", candidate, output_path)
+                return True
+
+        # Try GCS first (babymilu-images, babymilu-musics, babymilu-videos)
+        if storage_path:
+            gcs_bucket = _gcs_bucket_for_storage_path(storage_path)
+            gcs_url = f"https://storage.googleapis.com/{gcs_bucket}/{storage_path.replace(chr(92), '/')}"
+            try:
+                import requests
+                resp = requests.get(gcs_url, timeout=30)
+                if resp.status_code == 200:
+                    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+                    with open(output_path, "wb") as f:
+                        f.write(resp.content)
+                    logger.debug("Downloaded asset from GCS: %s", gcs_url)
+                    return True
+            except Exception as e:
+                logger.debug("GCS download failed for %s: %s", gcs_url, e)
+
+        # If url is already a GCS (or any) URL, try it before Supabase
+        if url and "storage.googleapis.com" in (url or ""):
+            try:
+                import requests
+                resp = requests.get(url, timeout=30)
+                if resp.status_code == 200:
+                    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+                    with open(output_path, "wb") as f:
+                        f.write(resp.content)
+                    return True
+            except Exception as e:
+                logger.debug("URL download failed for %s: %s", url, e)
+
+        # Try to download from Supabase storage_path
         if storage_path:
             try:
                 # Determine bucket from storage_path or try multiple buckets
@@ -139,25 +200,23 @@ def download_asset(asset_id: str, output_path: str) -> bool:
                     bucket_name = 'assets'
                     path_in_bucket = storage_path.replace('assets/', '', 1)
                 
-                # Try specific bucket first, then fallback to common buckets
+                # Try specific bucket first; if no prefix, prefer "assets" (common layout: assets bucket > jjk > character > files)
                 buckets_to_try = []
                 if bucket_name:
                     buckets_to_try = [bucket_name]
-                # Also try common buckets as fallback
-                buckets_to_try.extend(["images", "assets", "music"])
-                # Remove duplicates while preserving order
+                else:
+                    buckets_to_try = ["assets", "images", "music"]
                 buckets_to_try = list(dict.fromkeys(buckets_to_try))
-                
+
                 for bucket in buckets_to_try:
                     try:
                         # Access storage bucket - Supabase Python client uses from_ (with underscore)
-                        # Use getattr to explicitly get the method to avoid any Python keyword issues
                         if hasattr(supabase.storage, 'from_'):
                             storage_bucket = getattr(supabase.storage, 'from_')(bucket)
                         else:
-                            raise AttributeError(f"Storage client has no 'from_' method")
-                        
-                        # Use path_in_bucket for specific buckets, original path for fallback
+                            raise AttributeError("Storage client has no 'from_' method")
+
+                        # Use path_in_bucket for the bucket that matches the prefix, else full storage_path
                         download_path = path_in_bucket if bucket == bucket_name else storage_path
                         file_data = storage_bucket.download(download_path)
                         if file_data:
@@ -168,7 +227,11 @@ def download_asset(asset_id: str, output_path: str) -> bool:
                                 else:
                                     f.write(file_data.encode() if isinstance(file_data, str) else bytes(file_data))
                             return True
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(
+                            "Storage download failed for asset %s bucket=%s path=%s: %s",
+                            asset_id, bucket, download_path, e,
+                        )
                         continue
             except Exception:
                 pass
@@ -183,6 +246,11 @@ def download_asset(asset_id: str, output_path: str) -> bool:
                     f.write(resp.content)
                 return True
 
+        logger.warning(
+            "Asset %s could not be downloaded from storage (path=%s). "
+            "If Supabase shows 'EXCEEDING USAGE LIMITS', resolve that in the dashboard first.",
+            asset_id, storage_path or "(none)",
+        )
         return False
     except Exception as e:
         logger.error(f"Failed to download asset {asset_id}: {e}", exc_info=True)
@@ -311,9 +379,9 @@ def _process_video_job(job: Dict[str, Any], template: Template, account: Dict[st
             wrap_width_chars=cfg.overlay.wrap_width_chars,
         )
     except Exception:
-        # Use defaults if config not available
+        # Use defaults if config not available (FONT_PATH env used in Cloud Run / Docker)
         overlay_opts = OverlayOptions(
-            font_path="./fonts/AutourOne-Regular.ttf",
+            font_path=os.getenv("FONT_PATH", "./fonts/AutourOne-Regular.ttf"),
             font_size=60,
             color="#ffffff",
             stroke_color="#000000",
@@ -376,6 +444,12 @@ def _process_video_job(job: Dict[str, Any], template: Template, account: Dict[st
         image_duration = job.get("image_duration", 3.0)
         rapid_mode = job.get("rapid_mode", False)
 
+        def _video_progress(slides_done: int, total_slides: int) -> None:
+            if total_slides > 0:
+                # Ramp progress from 50% to 79% during slide creation
+                p = 50 + int(29 * slides_done / total_slides)
+                update_job_status(job_id, "processing", progress=min(p, 79))
+
         create_video_from_images(
             image_paths=image_paths,
             output_path=output_video,
@@ -384,6 +458,7 @@ def _process_video_job(job: Dict[str, Any], template: Template, account: Dict[st
             image_duration=image_duration,
             rapid_mode=rapid_mode,
             audio_path=audio_path,
+            progress_callback=_video_progress,
         )
     elif video_source:
         # Overlay text on base video
@@ -415,11 +490,11 @@ def _process_video_job(job: Dict[str, Any], template: Template, account: Dict[st
             logger.warning(f"Failed to clean up audio file {audio_path}: {e}")
 
     # Upload to Supabase Storage
-    add_job_log(job_id, "info", "Uploading video to Supabase Storage")
-    video_url = upload_video_to_supabase(output_video, account_id, template_id)
+    add_job_log(job_id, "info", "Uploading video to storage")
+    video_url = upload_video(output_video, account_id, template_id)
 
     if not video_url:
-        raise ValueError("Failed to upload video to Supabase Storage")
+        raise ValueError("Failed to upload video to storage")
 
     add_job_log(job_id, "info", f"Video uploaded: {video_url}")
     update_job_status(job_id, "processing", progress=90)
@@ -461,7 +536,7 @@ def _process_slideshow_job(job: Dict[str, Any], template: Template, account: Dic
         )
     except Exception:
         overlay_opts = OverlayOptions(
-            font_path="./fonts/AutourOne-Regular.ttf",
+            font_path=os.getenv("FONT_PATH", "./fonts/AutourOne-Regular.ttf"),
             font_size=60, color="#ffffff", stroke_color="#000000",
             stroke_width=12, position="bottom", padding=600, wrap_width_chars=18,
         )
@@ -533,10 +608,10 @@ def _process_slideshow_job(job: Dict[str, Any], template: Template, account: Dic
             pass
 
     # Upload to Supabase Storage
-    add_job_log(job_id, "info", "Uploading slideshow to Supabase Storage")
-    video_url = upload_video_to_supabase(output_video, account_id, template_id)
+    add_job_log(job_id, "info", "Uploading slideshow to storage")
+    video_url = upload_video(output_video, account_id, template_id)
     if not video_url:
-        raise ValueError("Failed to upload slideshow to Supabase Storage")
+        raise ValueError("Failed to upload slideshow to storage")
 
     add_job_log(job_id, "info", f"Slideshow uploaded: {video_url}")
     update_job_status(job_id, "processing", progress=90)
@@ -546,7 +621,7 @@ def _process_slideshow_job(job: Dict[str, Any], template: Template, account: Dic
     if output_as_slides:
         add_job_log(job_id, "info", "Exporting individual slide images for carousel publishing")
         for idx, img_path in enumerate(image_paths):
-            slide_url = upload_video_to_supabase(img_path, account_id, f"{template_id}_slide_{idx}")
+            slide_url = upload_video(img_path, account_id, f"{template_id}_slide_{idx}")
             if slide_url:
                 slide_image_urls.append(slide_url)
 
@@ -586,7 +661,7 @@ def _process_carousel_job(job: Dict[str, Any], template: Template, account: Dict
         )
     except Exception:
         overlay_opts = OverlayOptions(
-            font_path="./fonts/AutourOne-Regular.ttf",
+            font_path=os.getenv("FONT_PATH", "./fonts/AutourOne-Regular.ttf"),
             font_size=60, color="#ffffff", stroke_color="#000000",
             stroke_width=12, position="center", padding=600, wrap_width_chars=18,
         )
@@ -667,8 +742,8 @@ def _process_carousel_job(job: Dict[str, Any], template: Template, account: Dict
     # Upload final video
     video_url = None
     if final_video and os.path.exists(final_video):
-        add_job_log(job_id, "info", "Uploading carousel video to Supabase Storage")
-        video_url = upload_video_to_supabase(final_video, account_id, template_id)
+        add_job_log(job_id, "info", "Uploading carousel video to storage")
+        video_url = upload_video(final_video, account_id, template_id)
 
     # Upload individual slide images for GeeLark carousel publishing
     add_job_log(job_id, "info", "Uploading individual slides for carousel publishing")
@@ -676,7 +751,7 @@ def _process_carousel_job(job: Dict[str, Any], template: Template, account: Dict
     slide_image_urls = []
     for slide_img in slide_images:
         if os.path.exists(slide_img):
-            slide_url = upload_video_to_supabase(
+            slide_url = upload_video(
                 slide_img, account_id, f"{template_id}_slide_{len(slide_image_urls)}"
             )
             if slide_url:
@@ -693,12 +768,35 @@ def _process_carousel_job(job: Dict[str, Any], template: Template, account: Dict
     add_job_log(job_id, "info", "Carousel job completed successfully")
 
 
-def run_worker(poll_interval: int = 5, output_dir: str = "./output") -> None:
-    """Run the job worker in a loop."""
+def run_worker(
+    poll_interval: int = 5,
+    output_dir: str = "./output",
+    max_duration_minutes: Optional[int] = None,
+    max_jobs: Optional[int] = None,
+) -> None:
+    """Run the job worker in a loop.
+
+    For Cloud Run Jobs: set max_duration_minutes (e.g. 30) or max_jobs (e.g. 10) so the
+    worker exits and the job finishes; Cloud Scheduler can trigger the next run.
+    """
     logger.info("Starting job worker (polling every %d seconds)", poll_interval)
+    if max_duration_minutes:
+        logger.info("Will exit after %d minutes", max_duration_minutes)
+    if max_jobs is not None:
+        logger.info("Will exit after %d jobs", max_jobs)
+
+    start_time = time.time()
+    jobs_done = 0
 
     while True:
         try:
+            if max_duration_minutes and (time.time() - start_time) >= max_duration_minutes * 60:
+                logger.info("Reached max duration (%d min), exiting", max_duration_minutes)
+                break
+            if max_jobs is not None and jobs_done >= max_jobs:
+                logger.info("Reached max jobs (%d), exiting", max_jobs)
+                break
+
             # Fetch pending job
             job = fetch_pending_job()
 
@@ -711,6 +809,7 @@ def run_worker(poll_interval: int = 5, output_dir: str = "./output") -> None:
                     logger.info("Claimed job: %s", job_id)
                     try:
                         process_job(job, output_dir)
+                        jobs_done += 1
                     except Exception as e:
                         logger.error(f"Error processing job {job_id}: {e}", exc_info=True)
                         update_job_status(job_id, "failed", error_message=str(e))
