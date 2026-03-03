@@ -203,21 +203,41 @@ export async function POST(request: NextRequest) {
         .filter(([, v]) => v === fandomCategory)
         .map(([k]) => k),
     ]
+    // 1. From the subcategory column
     const { data: subcatRows } = await supabase
       .from('assets')
       .select('subcategory')
       .in('category', categoryAliases)
       .not('subcategory', 'is', null)
 
-    let subcategories = Array.from(
-      new Set(
-        (subcatRows || [])
-          .map((r: any) => r.subcategory)
-          .filter(
-            (s: string | null) =>
-              s && s !== 'other' && s !== 'general' && s !== fandomCategory
-          )
+    const fromColumn = (subcatRows || [])
+      .map((r: any) => r.subcategory)
+      .filter(
+        (s: string | null) =>
+          s && s !== 'other' && s !== 'general' && s !== fandomCategory
       )
+
+    // 2. From storage_path: assets/{category}/{subcategory}/filename -> extract subcategory
+    const pathSubcats: string[] = []
+    for (const alias of categoryAliases) {
+      const { data: pathRows } = await supabase
+        .from('assets')
+        .select('storage_path')
+        .like('storage_path', `assets/${alias}/%`)
+        .limit(5000)
+
+      for (const row of pathRows || []) {
+        const parts = ((row as any).storage_path || '').split('/')
+        if (parts.length >= 4 && parts[2]) {
+          pathSubcats.push(parts[2])
+        }
+      }
+    }
+
+    let subcategories = Array.from(
+      new Set([...fromColumn, ...pathSubcats])
+    ).filter(
+      (s) => s && s !== 'other' && s !== 'general' && s !== fandomCategory
     )
     // When GCS is configured, merge in subcategories from bucket structure (assets/{category}/{subcategory}/)
     let subcategoriesFromGcs: string[] = []

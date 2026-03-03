@@ -17,6 +17,7 @@ import VideoUploader from '@/components/VideoUploader'
 import JobsList from '@/components/JobsList'
 import JobCreateButton from '@/components/JobCreateButton'
 import AutoGenerateButton from '@/components/AutoGenerateButton'
+import CategoryMappingButton from '@/components/CategoryMappingButton'
 
 interface Video {
   id: string
@@ -156,7 +157,8 @@ export default function VideosPage() {
       </Box>
 
       <TabPanel value={tabValue} index={0}>
-        <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 2, mb: 3 }}>
+        <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 2, mb: 3, flexWrap: 'wrap' }}>
+          <CategoryMappingButton />
           <AutoGenerateButton onSuccess={fetchJobs} />
           <JobCreateButton />
         </Box>
