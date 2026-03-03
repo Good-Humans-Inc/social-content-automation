@@ -2,6 +2,7 @@
 
 import logging
 import os
+import random
 import shutil
 import time
 from pathlib import Path
@@ -13,6 +14,43 @@ from src.video_storage import upload_video
 from src.text_overlay import OverlayOptions
 
 logger = logging.getLogger(__name__)
+
+_EFFECT_PRESETS: Dict[str, Dict[str, Any]] = {
+    "cinematic": {
+        "ken_burns": True,
+        "ken_burns_direction": random.choice(["in", "out"]),
+        "film_grain": True,
+        "vignette": True,
+    },
+    "energetic": {
+        "shake": True,
+        "shake_intensity": 6,
+        "mirror": True,
+        "contrast": 1.3,
+        "saturation": 1.2,
+    },
+}
+
+
+def _resolve_diversification(effect_preset: str) -> Optional[Dict[str, Any]]:
+    """Convert an effect_preset name into a diversification dict."""
+    if effect_preset == "none" or not effect_preset:
+        return None
+    if effect_preset == "random":
+        return {
+            "ken_burns": random.random() > 0.5,
+            "ken_burns_direction": random.choice(["in", "out"]),
+            "film_grain": random.random() > 0.5,
+            "vignette": random.random() > 0.6,
+            "shake": random.random() > 0.7,
+            "shake_intensity": random.randint(3, 8),
+            "mirror": random.random() > 0.7,
+            "brightness": round(random.uniform(-0.1, 0.1), 2),
+            "contrast": round(random.uniform(0.9, 1.3), 2),
+            "saturation": round(random.uniform(0.8, 1.3), 2),
+            "zoom": round(random.uniform(1.0, 1.15), 2),
+        }
+    return _EFFECT_PRESETS.get(effect_preset)
 
 
 def add_job_log(job_id: str, level: str, message: str) -> None:
@@ -125,6 +163,35 @@ def _gcs_bucket_for_storage_path(storage_path: str) -> Optional[str]:
     return _GCS_BUCKET_IMAGES
 
 
+def _is_valid_media(path: str) -> bool:
+    """Quick-check that a downloaded file looks like a real image or audio (not empty or HTML error)."""
+    try:
+        size = os.path.getsize(path)
+        if size < 100:
+            return False
+        with open(path, "rb") as f:
+            header = f.read(16)
+        if header[:3] == b'\xff\xd8\xff':          # JPEG
+            return True
+        if header[:8] == b'\x89PNG\r\n\x1a\n':     # PNG
+            return True
+        if header[:4] == b'RIFF' and header[8:12] == b'WEBP':  # WebP
+            return True
+        if header[:4] == b'GIF8':                   # GIF
+            return True
+        if header[:3] == b'ID3' or header[:2] == b'\xff\xfb':  # MP3
+            return True
+        if header[:4] == b'fLaC':                   # FLAC
+            return True
+        if header[4:8] == b'ftyp':                  # MP4/M4A
+            return True
+        if header[:4] == b'OggS':                   # OGG
+            return True
+        return False
+    except Exception:
+        return False
+
+
 def download_asset(asset_id: str, output_path: str) -> bool:
     """Download an asset from local path, GCS (babymilu-* buckets), or Supabase Storage."""
     supabase = ensure_supabase_client()
@@ -156,7 +223,23 @@ def download_asset(asset_id: str, output_path: str) -> bool:
         # Try GCS first (babymilu-images, babymilu-musics, babymilu-videos)
         if storage_path:
             gcs_bucket = _gcs_bucket_for_storage_path(storage_path)
-            gcs_url = f"https://storage.googleapis.com/{gcs_bucket}/{storage_path.replace(chr(92), '/')}"
+            gcs_path = storage_path.replace("\\", "/")
+            # 1) Authenticated download (job's service account on Cloud Run; works with private buckets)
+            try:
+                from google.cloud import storage
+                client = storage.Client()
+                bucket = client.bucket(gcs_bucket)
+                blob = bucket.blob(gcs_path)
+                Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+                blob.download_to_filename(output_path)
+                if _is_valid_media(output_path):
+                    logger.info("Downloaded asset from GCS (auth): gs://%s/%s", gcs_bucket, gcs_path)
+                    return True
+                logger.warning("GCS auth download for gs://%s/%s produced invalid image, trying next source", gcs_bucket, gcs_path)
+            except Exception as e:
+                logger.debug("GCS authenticated download failed for gs://%s/%s: %s", gcs_bucket, gcs_path, e)
+            # 2) Public URL (for public buckets)
+            gcs_url = f"https://storage.googleapis.com/{gcs_bucket}/{gcs_path}"
             try:
                 import requests
                 resp = requests.get(gcs_url, timeout=30)
@@ -164,10 +247,12 @@ def download_asset(asset_id: str, output_path: str) -> bool:
                     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
                     with open(output_path, "wb") as f:
                         f.write(resp.content)
-                    logger.debug("Downloaded asset from GCS: %s", gcs_url)
-                    return True
+                    if _is_valid_media(output_path):
+                        logger.debug("Downloaded asset from GCS (public): %s", gcs_url)
+                        return True
+                    logger.warning("GCS public download for %s produced invalid image", gcs_url)
             except Exception as e:
-                logger.debug("GCS download failed for %s: %s", gcs_url, e)
+                logger.debug("GCS public URL failed for %s: %s", gcs_url, e)
 
         # If url is already a GCS (or any) URL, try it before Supabase
         if url and "storage.googleapis.com" in (url or ""):
@@ -178,7 +263,9 @@ def download_asset(asset_id: str, output_path: str) -> bool:
                     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
                     with open(output_path, "wb") as f:
                         f.write(resp.content)
-                    return True
+                    if _is_valid_media(output_path):
+                        return True
+                    logger.warning("URL download for %s produced invalid image", url)
             except Exception as e:
                 logger.debug("URL download failed for %s: %s", url, e)
 
@@ -226,7 +313,9 @@ def download_asset(asset_id: str, output_path: str) -> bool:
                                     f.write(file_data)
                                 else:
                                     f.write(file_data.encode() if isinstance(file_data, str) else bytes(file_data))
-                            return True
+                            if _is_valid_media(output_path):
+                                return True
+                            logger.warning("Supabase download for asset %s bucket=%s produced invalid image", asset_id, bucket)
                     except Exception as e:
                         logger.debug(
                             "Storage download failed for asset %s bucket=%s path=%s: %s",
@@ -244,7 +333,9 @@ def download_asset(asset_id: str, output_path: str) -> bool:
                 Path(output_path).parent.mkdir(parents=True, exist_ok=True)
                 with open(output_path, "wb") as f:
                     f.write(resp.content)
-                return True
+                if _is_valid_media(output_path):
+                    return True
+                logger.warning("Fallback URL download for asset %s produced invalid image (%s)", asset_id, url)
 
         logger.warning(
             "Asset %s could not be downloaded from storage (path=%s). "
@@ -396,6 +487,11 @@ def _process_video_job(job: Dict[str, Any], template: Template, account: Dict[st
     music_url = job.get("music_url")
     music_asset_id = job.get("music_asset_id")
 
+    effect_preset = job.get("effect_preset", "none") or "none"
+    diversification = _resolve_diversification(effect_preset)
+    if diversification:
+        add_job_log(job_id, "info", f"Effect preset: {effect_preset}")
+
     output_video = os.path.join(output_dir, f"{job_id}.mp4")
     overlay_text = "\n".join(template.overlay) if template.overlay else ""
 
@@ -431,24 +527,40 @@ def _process_video_job(job: Dict[str, Any], template: Template, account: Dict[st
         update_job_status(job_id, "processing", progress=30)
 
         image_paths = []
+        skipped = 0
         for idx, asset_id in enumerate(image_asset_ids):
             image_path = os.path.join(temp_dir, f"image_{idx}.jpg")
             if download_asset(asset_id, image_path):
                 image_paths.append(image_path)
             else:
-                raise ValueError(f"Failed to download asset {asset_id}")
+                skipped += 1
+                add_job_log(job_id, "warning", f"Skipping image {idx+1}/{len(image_asset_ids)} (asset {asset_id}): download failed or corrupt")
+        if not image_paths:
+            raise ValueError(f"All {len(image_asset_ids)} image downloads failed")
+        if skipped:
+            add_job_log(job_id, "warning", f"Skipped {skipped}/{len(image_asset_ids)} images, continuing with {len(image_paths)}")
 
         add_job_log(job_id, "info", f"Creating video from {len(image_paths)} images")
+        add_job_log(job_id, "info", f"Rendering slides 1–{len(image_paths)} (each slide may take 10–30 s)...")
         update_job_status(job_id, "processing", progress=50)
 
         image_duration = job.get("image_duration", 3.0)
         rapid_mode = job.get("rapid_mode", False)
 
         def _video_progress(slides_done: int, total_slides: int) -> None:
-            if total_slides > 0:
-                # Ramp progress from 50% to 79% during slide creation
-                p = 50 + int(29 * slides_done / total_slides)
-                update_job_status(job_id, "processing", progress=min(p, 79))
+            if total_slides <= 0:
+                return
+            # slides_done==0 means "starting slide phase" -> move to 51% immediately so UI doesn't look stuck
+            if slides_done == 0:
+                update_job_status(job_id, "processing", progress=51)
+                return
+            # Ramp progress from 51% to 79% as slides complete
+            p = 50 + int(29 * slides_done / total_slides)
+            if p == 50:
+                p = 51
+            update_job_status(job_id, "processing", progress=min(p, 79))
+            if slides_done == 1 or slides_done == total_slides or slides_done % 5 == 0:
+                add_job_log(job_id, "info", f"Rendering slide {slides_done}/{total_slides}")
 
         create_video_from_images(
             image_paths=image_paths,
@@ -459,6 +571,7 @@ def _process_video_job(job: Dict[str, Any], template: Template, account: Dict[st
             rapid_mode=rapid_mode,
             audio_path=audio_path,
             progress_callback=_video_progress,
+            diversification=diversification,
         )
     elif video_source:
         # Overlay text on base video
@@ -552,16 +665,22 @@ def _process_slideshow_job(job: Dict[str, Any], template: Template, account: Dic
     temp_dir = os.path.join(output_dir, f"temp_{job_id}")
     os.makedirs(temp_dir, exist_ok=True)
 
-    # Download images
+    # Download images (skip corrupt/failed ones)
     add_job_log(job_id, "info", f"Downloading {len(image_asset_ids)} images")
     update_job_status(job_id, "processing", progress=30)
     image_paths = []
+    skipped_ss = 0
     for idx, asset_id in enumerate(image_asset_ids):
         image_path = os.path.join(temp_dir, f"image_{idx}.jpg")
         if download_asset(asset_id, image_path):
             image_paths.append(image_path)
         else:
-            raise ValueError(f"Failed to download asset {asset_id}")
+            skipped_ss += 1
+            add_job_log(job_id, "warning", f"Skipping image {idx+1}/{len(image_asset_ids)} (asset {asset_id}): download failed or corrupt")
+    if not image_paths:
+        raise ValueError(f"All {len(image_asset_ids)} image downloads failed")
+    if skipped_ss:
+        add_job_log(job_id, "warning", f"Skipped {skipped_ss}/{len(image_asset_ids)} images, continuing with {len(image_paths)}")
 
     # Handle music
     audio_path = None
@@ -678,16 +797,22 @@ def _process_carousel_job(job: Dict[str, Any], template: Template, account: Dict
     temp_dir = os.path.join(output_dir, f"temp_{job_id}")
     os.makedirs(temp_dir, exist_ok=True)
 
-    # Download images
+    # Download images (skip corrupt/failed ones)
     add_job_log(job_id, "info", f"Downloading {len(image_asset_ids)} images")
     update_job_status(job_id, "processing", progress=30)
     image_paths = []
+    skipped_car = 0
     for idx, asset_id in enumerate(image_asset_ids):
         image_path = os.path.join(temp_dir, f"image_{idx}.jpg")
         if download_asset(asset_id, image_path):
             image_paths.append(image_path)
         else:
-            raise ValueError(f"Failed to download asset {asset_id}")
+            skipped_car += 1
+            add_job_log(job_id, "warning", f"Skipping image {idx+1}/{len(image_asset_ids)} (asset {asset_id}): download failed or corrupt")
+    if not image_paths:
+        raise ValueError(f"All {len(image_asset_ids)} image downloads failed")
+    if skipped_car:
+        add_job_log(job_id, "warning", f"Skipped {skipped_car}/{len(image_asset_ids)} images, continuing with {len(image_paths)}")
 
     # Handle music
     audio_path = None

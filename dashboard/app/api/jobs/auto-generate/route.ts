@@ -220,7 +220,7 @@ export async function POST(request: NextRequest) {
           music_url: null,
           character_name: character,
           visual_type: 'A',
-          effect_preset: 'none',
+          effect_preset: 'random',
           output_as_slides: false,
           status: 'pending',
           progress: 0,

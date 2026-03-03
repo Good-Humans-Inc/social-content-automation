@@ -182,7 +182,15 @@ def main():
                 blob = bucket.blob(gcs_path)
                 if blob.exists():
                     skipped += 1
-                    logger.debug("[%d/%d] SKIP (exists) %s", i + 1, len(rows), asset_id)
+                    if args.update_db:
+                        public_url = f"https://storage.googleapis.com/{bucket_name}/{gcs_path}"
+                        try:
+                            supabase.table("assets").update({"url": public_url}).eq("id", asset_id).execute()
+                            logger.debug("[%d/%d] SKIP (exists) + updated DB url %s", i + 1, len(rows), asset_id)
+                        except Exception as e:
+                            logger.warning("Could not update asset url for %s: %s", asset_id, e)
+                    else:
+                        logger.debug("[%d/%d] SKIP (exists) %s", i + 1, len(rows), asset_id)
                     continue
 
             # Unique temp file per asset to avoid overwriting

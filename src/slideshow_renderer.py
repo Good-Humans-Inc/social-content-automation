@@ -29,87 +29,79 @@ def _quote_for_filter(value: str) -> str:
     return "'" + value.replace("'", r"\'") + "'"
 
 
+def _escape_filter_path(path: str) -> str:
+    """Normalise and escape a path for FFmpeg filter options."""
+    import re
+    p = os.path.abspath(path).replace("\\", "/")
+    p = re.sub(r'^([A-Za-z]):', r'\1\\\\:', p)
+    return p.replace(";", "\\;").replace(",", "\\,").replace("=", "\\=")
+
+
 def _create_image_with_text(
     image_path: str, text: str, output_path: str, opts: OverlayOptions, duration: float = 3.0
 ) -> None:
     """Create a video frame from an image with text overlay."""
-    fontfile = os.path.abspath(opts.font_path)
+    fontfile_escaped = _escape_filter_path(opts.font_path)
     fontcolor = _hex_to_ffmpeg_color(opts.color)
     bordercolor = _hex_to_ffmpeg_color(opts.stroke_color)
     fontsize = opts.font_size
     borderw = max(0, int(opts.stroke_width))
+    line_spacing = 8
 
-    # Positioning
-    if opts.position == "center":
-        x_expr = "(w-tw)/2"
-        y_expr = "(h-th)/2"
-    else:
-        x_expr = "(w-tw)/2"
-        y_expr = f"h-th-{int(opts.padding)}"
-
-    # Wrap text
     wrapped = wrap_text(text, opts.wrap_width_chars)
+    lines = [l.strip() for l in wrapped.split("\n") if l.strip()]
+    if not lines:
+        lines = [""]
 
-    # Write text to a temporary file (more reliable than inline text, especially on Windows)
-    import re
-    with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', suffix='.txt', delete=False) as tmp_text:
-        tmp_text.write(wrapped)
-        tmp_text_path = tmp_text.name
-    
+    line_height = fontsize + line_spacing
+    total_height = len(lines) * fontsize + (len(lines) - 1) * line_spacing
+
+    tmp_text_paths: list[str] = []
     try:
-        # Convert Windows paths to forward slashes and escape drive letter colon
-        fontfile_normalized = fontfile.replace("\\", "/")
-        tmp_text_normalized = tmp_text_path.replace("\\", "/")
-        
-        # Escape the colon in Windows drive letters (C: -> C\:)
-        # Use double backslashes so it becomes single backslash when passed to ffmpeg
-        fontfile_escaped = re.sub(r'^([A-Za-z]):', r'\1\\\\:', fontfile_normalized)
-        tmp_text_escaped = re.sub(r'^([A-Za-z]):', r'\1\\\\:', tmp_text_normalized)
-        
-        # Escape other special characters that break filter syntax
-        fontfile_escaped = fontfile_escaped.replace(";", "\\;").replace(",", "\\,").replace("=", "\\=")
-        tmp_text_escaped = tmp_text_escaped.replace(";", "\\;").replace(",", "\\,").replace("=", "\\=")
-        
-        # Build filter using textfile (more reliable than inline text on Windows)
-        # Add scale filter to ensure dimensions are divisible by 2 (required for H.264 yuv420p)
-        # This fixes the "height not divisible by 2" error
-        drawtext_filter = (
-            f"drawtext=fontfile={fontfile_escaped}:"
-            f"textfile={tmp_text_escaped}:"
-            f"fontsize={fontsize}:"
-            f"fontcolor={fontcolor}:"
-            f"borderw={borderw}:"
-            f"bordercolor={bordercolor}:"
-            f"line_spacing=8:"
-            f"x={x_expr}:"
-            f"y={y_expr}:"
-            f"box=0"
-        )
-        
-        # Scale to ensure even dimensions (required for H.264 yuv420p)
-        # Use scale filter that rounds to nearest even number
-        text_filter = f"scale=trunc(iw/2)*2:trunc(ih/2)*2,{drawtext_filter}"
+        drawtext_parts: list[str] = []
+        for i, line in enumerate(lines):
+            with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', suffix='.txt', delete=False) as tmp:
+                tmp.write(line)
+                tmp_text_paths.append(tmp.name)
+            line_escaped = _escape_filter_path(tmp_text_paths[-1])
+
+            if opts.position == "center":
+                y_expr = f"(h-{total_height})/2+{i * line_height}"
+            else:
+                y_expr = f"h-{int(opts.padding)}-{total_height}+{i * line_height}"
+
+            drawtext_parts.append(
+                f"drawtext=fontfile={fontfile_escaped}:"
+                f"textfile={line_escaped}:"
+                f"fontsize={fontsize}:"
+                f"fontcolor={fontcolor}:"
+                f"borderw={borderw}:"
+                f"bordercolor={bordercolor}:"
+                f"x=(w-tw)/2:"
+                f"y={y_expr}:"
+                f"box=0"
+            )
+
+        text_filter = "scale=trunc(iw/2)*2:trunc(ih/2)*2," + ",".join(drawtext_parts)
     except Exception:
-        # Clean up temp file on error
-        try:
-            os.unlink(tmp_text_path)
-        except:
-            pass
+        for p in tmp_text_paths:
+            try:
+                os.unlink(p)
+            except Exception:
+                pass
         raise
 
     # Normalize image and output paths for Windows
     image_path_normalized = image_path.replace("\\", "/")
     output_path_normalized = output_path.replace("\\", "/")
 
-    # Convert image to video with text overlay
-    # Use -stream_loop -1 for compatibility with all ffmpeg builds (e.g. gyan.dev 8.x)
     image_path_abs = os.path.abspath(image_path).replace("\\", "/")
+    loop_and_filter = f"loop=-1:1:0,setpts=N/30/TB,{text_filter}"
     cmd = [
         "ffmpeg",
         "-y",
-        "-stream_loop", "-1",
         "-i", image_path_abs,
-        "-vf", text_filter,
+        "-vf", loop_and_filter,
         "-t", str(duration),
         "-c:v", "libx264",
         "-preset", "veryfast",
@@ -130,12 +122,12 @@ def _create_image_with_text(
             errors='replace'
         )
     except subprocess.CalledProcessError as e:
-        # Clean up temp text file
-        try:
-            os.unlink(tmp_text_path)
-        except:
-            pass
-        
+        for p in tmp_text_paths:
+            try:
+                os.unlink(p)
+            except Exception:
+                pass
+
         stderr_output = e.stderr if isinstance(e.stderr, str) else (e.stderr.decode('utf-8', errors='replace') if e.stderr else "")
         error_msg = f"ffmpeg failed with code {e.returncode}"
         if stderr_output:
@@ -143,12 +135,12 @@ def _create_image_with_text(
         error_msg += f"\nCommand: {' '.join(cmd)}"
         error_msg += f"\nFilter: {text_filter}"
         raise RuntimeError(error_msg) from e
-    
-    # Clean up temp text file after successful execution
-    try:
-        os.unlink(tmp_text_path)
-    except:
-        pass
+
+    for p in tmp_text_paths:
+        try:
+            os.unlink(p)
+        except Exception:
+            pass
 
 
 def _create_text_only_slide(
@@ -316,7 +308,7 @@ def _create_4_image_grid(
         # Actually, let's use scale with decrease, then pad with a check, or use crop
         # Simplest: scale to slightly larger than target, then crop to exact size
         # This avoids the pad dimension error
-        scale_filters.append(f"[{i}:v]scale={img_width}:{img_height}:force_original_aspect_ratio=increase[scaled{i}];[scaled{i}]crop={img_width}:{img_height}:(iw-{img_width})/2:(ih-{img_height})/2,setpts=PTS-STARTPTS[v{i}]")
+        scale_filters.append(f"[{i}:v]loop=-1:1:0,setpts=N/30/TB,scale={img_width}:{img_height}:force_original_aspect_ratio=increase[scaled{i}];[scaled{i}]crop={img_width}:{img_height}:(iw-{img_width})/2:(ih-{img_height})/2[v{i}]")
     
     # Create base canvas with border color
     base_filter = f"color={border_color}:size={width}x{height}:duration={duration}[base]"
@@ -391,9 +383,8 @@ def _create_4_image_grid(
         "-y",
     ]
     
-    # Add all 4 input images (-stream_loop -1 for compatibility with all ffmpeg builds)
     for img_path in normalized_paths:
-        cmd.extend(["-stream_loop", "-1", "-i", os.path.abspath(img_path).replace("\\", "/")])
+        cmd.extend(["-i", os.path.abspath(img_path).replace("\\", "/")])
     
     # Add filter and output settings
     cmd.extend([

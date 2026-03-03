@@ -2,6 +2,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional, Dict, Any, List, Callable
 
 from src.text_overlay import OverlayOptions, wrap_text
@@ -16,52 +17,63 @@ def _hex_to_ffmpeg_color(hex_color: str) -> str:
     return f"0x{c.lower()}"
 
 
+def _escape_filter_path(path: str) -> str:
+    """Normalise and escape a filesystem path for use inside an FFmpeg filter option."""
+    import re
+    p = os.path.abspath(path).replace("\\", "/")
+    p = re.sub(r'^([A-Za-z]):', r'\1\\\\:', p)
+    return p.replace(";", "\\;").replace(",", "\\,").replace("=", "\\=")
+
+
 def _build_drawtext_filter(textfile_path: str, opts: OverlayOptions) -> str:
-    """Build the drawtext filter string with proper Windows path escaping."""
-    fontfile = os.path.abspath(opts.font_path)
+    """Build one or more chained drawtext filters with per-line centering.
+
+    Each line in the textfile gets its own drawtext filter so that every line
+    is individually centred (x=(w-tw)/2 uses that single line's width).
+    """
+    with open(textfile_path, "r", encoding="utf-8") as fh:
+        raw = fh.read().strip()
+    lines = [l.strip() for l in raw.split("\n") if l.strip()]
+    if not lines:
+        return "null"
+
+    fontfile_escaped = _escape_filter_path(opts.font_path)
     fontcolor = _hex_to_ffmpeg_color(opts.color)
     bordercolor = _hex_to_ffmpeg_color(opts.stroke_color)
     fontsize = opts.font_size
     borderw = max(0, int(opts.stroke_width))
+    line_spacing = 8
+    line_height = fontsize + line_spacing
+    total_height = len(lines) * fontsize + (len(lines) - 1) * line_spacing
 
-    # Positioning
-    if opts.position == "center":
-        x_expr = "(w-tw)/2"
-        y_expr = "(h-th)/2"
-    else:
-        x_expr = "(w-tw)/2"
-        y_expr = f"h-th-{int(opts.padding)}"
+    tmpdir = os.path.dirname(textfile_path)
 
-    # Convert to forward slashes for Windows compatibility
-    fontfile_normalized = fontfile.replace("\\", "/")
-    textfile_normalized = textfile_path.replace("\\", "/")
-    
-    # Escape the colon in Windows drive letters (C: -> C\:)
-    # This is required because : is used as a parameter separator in ffmpeg filters
-    # We need double backslashes in the replacement string so it becomes a single backslash
-    # when the string is passed to subprocess
-    import re
-    # r'\1\\\\:' produces \1\\: which becomes C\\: in Python string, which becomes C\: when passed to ffmpeg
-    fontfile_escaped = re.sub(r'^([A-Za-z]):', r'\1\\\\:', fontfile_normalized)
-    textfile_escaped = re.sub(r'^([A-Za-z]):', r'\1\\\\:', textfile_normalized)
-    
-    # Escape other special characters that break filter syntax
-    fontfile_escaped = fontfile_escaped.replace(";", "\\;").replace(",", "\\,").replace("=", "\\=")
-    textfile_escaped = textfile_escaped.replace(";", "\\;").replace(",", "\\,").replace("=", "\\=")
-    
-    args = [
-        f"fontfile={fontfile_escaped}",
-        f"textfile={textfile_escaped}",
-        f"fontsize={fontsize}",
-        f"fontcolor={fontcolor}",
-        f"borderw={borderw}",
-        f"bordercolor={bordercolor}",
-        "line_spacing=8",
-        f"x={x_expr}",
-        f"y={y_expr}",
-        "box=0",
-    ]
-    return "drawtext=" + ":".join(args)
+    filters: List[str] = []
+    for i, line in enumerate(lines):
+        line_file = os.path.join(tmpdir, f"_line_{i}.txt")
+        with open(line_file, "w", encoding="utf-8") as fh:
+            fh.write(line)
+        line_file_escaped = _escape_filter_path(line_file)
+
+        if opts.position == "center":
+            y_expr = f"(h-{total_height})/2+{i * line_height}"
+        else:
+            y_expr = f"h-{int(opts.padding)}-{total_height}+{i * line_height}"
+
+        args = [
+            f"fontfile={fontfile_escaped}",
+            f"textfile={line_file_escaped}",
+            f"fontsize={fontsize}",
+            f"fontcolor={fontcolor}",
+            f"borderw={borderw}",
+            f"bordercolor={bordercolor}",
+            "x=(w-tw)/2",
+            f"y={y_expr}",
+            "box=0",
+        ]
+        filters.append("drawtext=" + ":".join(args))
+
+    return ",".join(filters)
 
 
 def _build_animated_drawtext_filters(
@@ -340,9 +352,9 @@ def create_video_from_images(
     """
     Create a video from multiple images with text overlay in the middle.
 
-    Uses -stream_loop -1 (not -loop 1) for image input; FFmpeg 6+ removed the
-    image2 -loop option. If you see "Option loop not found", ensure the job
-    worker is running the latest code and restart it.
+    Uses the loop video filter (loop=-1:1:0) to hold each single-image input
+    for the desired duration. This avoids the -stream_loop hang on Debian FFmpeg
+    and the removed -loop option on FFmpeg 6+.
 
     Args:
         image_paths: List of image file paths to convert to video
@@ -406,7 +418,8 @@ def create_video_from_images(
         if rapid_mode:
             # Use a shorter duration for rapid changes (0.2 seconds per image)
             rapid_duration = 0.2
-            
+            if progress_callback:
+                progress_callback(0, num_images)  # signal "starting slides" so UI can show 51%
             # Standard video dimensions for consistent text size (vertical format for TikTok/Instagram)
             standard_width = 1080
             standard_height = 1920
@@ -424,26 +437,25 @@ def create_video_from_images(
                 pad_filter = f"pad={standard_width}:{standard_height}:(ow-iw)/2:(oh-ih)/2:color=black"
                 # Ensure dimensions are even (required for H.264 yuv420p)
                 even_dim_filter = f"scale=trunc(iw/2)*2:trunc(ih/2)*2"
-                # Combine: scale to fit, pad to exact size, ensure even dimensions, then add text
-                filtergraph = f"{scale_filter},{pad_filter},{even_dim_filter},{text_filter}"
+                # Use the loop video filter to hold the single image for the desired duration.
+                # loop=-1:1:0 = infinite loops, 1 frame, start at frame 0.
+                loop_filter = "loop=-1:1:0,setpts=N/30/TB"
+                filtergraph = f"{loop_filter},{scale_filter},{pad_filter},{even_dim_filter},{text_filter}"
                 
                 if diversification:
                     div_filters = _build_diversification_filters(diversification)
                     if div_filters:
-                        filtergraph = ",".join(div_filters) + f",{scale_filter},{pad_filter},{even_dim_filter},{text_filter}"
+                        filtergraph = f"{loop_filter}," + ",".join(div_filters) + f",{scale_filter},{pad_filter},{even_dim_filter},{text_filter}"
 
-                # Create short video from image with text overlay
-                # Use -stream_loop -1 (not -loop 1) for compatibility with all ffmpeg builds (e.g. gyan.dev 8.x)
                 img_abs = os.path.abspath(img_path).replace("\\", "/")
                 cmd = [
                     "ffmpeg",
                     "-y",
-                    "-stream_loop", "-1",
                     "-i", img_abs,
                     "-vf", filtergraph,
-                    "-t", str(rapid_duration),  # Very short duration for rapid changes
+                    "-t", str(rapid_duration),
                     "-c:v", "libx264",
-                    "-preset", "veryfast",
+                    "-preset", "ultrafast",  # Faster encode for per-slide (final concat keeps veryfast)
                     "-crf", "18",
                     "-pix_fmt", "yuv420p",
                     "-r", "30",
@@ -454,7 +466,7 @@ def create_video_from_images(
                     import logging
                     logger = logging.getLogger(__name__)
                     logger.debug(f"Creating rapid slide {i+1}/{num_images}: {' '.join(cmd)}")
-                    
+                    slide_timeout = int(os.environ.get("VIDEO_SLIDE_TIMEOUT_SECONDS", "120"))
                     subprocess.run(
                         cmd,
                         check=True,
@@ -462,11 +474,14 @@ def create_video_from_images(
                         stderr=subprocess.PIPE,
                         text=True,
                         encoding='utf-8',
-                        errors='replace'
+                        errors='replace',
+                        timeout=slide_timeout,
                     )
                     slide_videos.append(slide_video)
                     if progress_callback:
                         progress_callback(i + 1, num_images)
+                except subprocess.TimeoutExpired as e:
+                    raise RuntimeError(f"ffmpeg timed out after {slide_timeout}s creating rapid slide {i+1}/{num_images}") from e
                 except subprocess.CalledProcessError as e:
                     stderr_output = e.stderr if isinstance(e.stderr, str) else (e.stderr.decode('utf-8', errors='replace') if e.stderr else "")
                     error_msg = f"ffmpeg failed creating rapid slide {i+1} with code {e.returncode}"
@@ -550,72 +565,61 @@ def create_video_from_images(
         # Standard video dimensions for consistent text size (vertical format for TikTok/Instagram)
         standard_width = 1080
         standard_height = 1920
-        
-        slide_videos = []
-        for i, img_path in enumerate(normalized_image_paths):
+        scale_filter = f"scale={standard_width}:{standard_height}:force_original_aspect_ratio=decrease"
+        pad_filter = f"pad={standard_width}:{standard_height}:(ow-iw)/2:(oh-ih)/2:color=black"
+        even_dim_filter = f"scale=trunc(iw/2)*2:trunc(ih/2)*2"
+        loop_filter = "loop=-1:1:0,setpts=N/30/TB"
+        if diversification:
+            div_filters = _build_diversification_filters(diversification)
+            filtergraph_base = f"{loop_filter}," + (",".join(div_filters) + f",{scale_filter},{pad_filter},{even_dim_filter},{text_filter}" if div_filters else f"{scale_filter},{pad_filter},{even_dim_filter},{text_filter}")
+        else:
+            filtergraph_base = f"{loop_filter},{scale_filter},{pad_filter},{even_dim_filter},{text_filter}"
+
+        max_workers = int(os.environ.get("VIDEO_SLIDE_WORKERS", "1"))
+        if max_workers < 1:
+            max_workers = 1
+        if progress_callback:
+            progress_callback(0, num_images)  # signal "starting slides" so UI can show 51%
+
+        def _create_one_slide(item: tuple) -> tuple:
+            i, img_path = item
+            import logging
+            _log = logging.getLogger(__name__)
+            _log.info("Creating slide %s/%s", i + 1, num_images)
             slide_video = os.path.join(tmpdir, f"slide_{i:03d}.mp4")
-            
-            # Build filter: scale image to standard size (maintaining aspect ratio, then pad/crop to exact size)
-            # This ensures text size is consistent across all images regardless of original image dimensions
-            # First scale to fit within standard dimensions while maintaining aspect ratio
-            # Then pad to exact dimensions with black bars if needed
-            # Ensure dimensions are even (required for H.264 yuv420p)
-            scale_filter = f"scale={standard_width}:{standard_height}:force_original_aspect_ratio=decrease"
-            pad_filter = f"pad={standard_width}:{standard_height}:(ow-iw)/2:(oh-ih)/2:color=black"
-            even_dim_filter = f"scale=trunc(iw/2)*2:trunc(ih/2)*2"
-            
-            if diversification:
-                div_filters = _build_diversification_filters(diversification)
-                if div_filters:
-                    filtergraph = ",".join(div_filters) + f",{scale_filter},{pad_filter},{even_dim_filter},{text_filter}"
-                else:
-                    filtergraph = f"{scale_filter},{pad_filter},{even_dim_filter},{text_filter}"
-            else:
-                filtergraph = f"{scale_filter},{pad_filter},{even_dim_filter},{text_filter}"
-            
-            # Create video from image with text overlay
-            # Use -stream_loop -1 for compatibility with all ffmpeg builds
             img_abs = os.path.abspath(img_path).replace("\\", "/")
             cmd = [
-                "ffmpeg",
-                "-y",
-                "-stream_loop", "-1",
-                "-i", img_abs,
-                "-vf", filtergraph,
-                "-t", str(image_duration),
-                "-c:v", "libx264",
-                "-preset", "veryfast",
-                "-crf", "18",
-                "-pix_fmt", "yuv420p",
-                "-r", "30",
-                slide_video.replace("\\", "/"),
+                "ffmpeg", "-y", "-i", img_abs,
+                "-vf", filtergraph_base, "-t", str(image_duration),
+                "-c:v", "libx264", "-preset", "ultrafast", "-crf", "18",
+                "-pix_fmt", "yuv420p", "-r", "30", slide_video.replace("\\", "/"),
             ]
-            
+            slide_timeout = int(os.environ.get("VIDEO_SLIDE_TIMEOUT_SECONDS", "120"))
             try:
-                import logging
-                logger = logging.getLogger(__name__)
-                logger.debug(f"Creating slide {i+1}/{num_images}: {' '.join(cmd)}")
-                
-                subprocess.run(
-                    cmd,
-                    check=True,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    encoding='utf-8',
-                    errors='replace'
-                )
-                slide_videos.append(slide_video)
+                subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace", timeout=slide_timeout)
+            except subprocess.TimeoutExpired as e:
+                raise RuntimeError(f"ffmpeg timed out after {slide_timeout}s on slide {i+1}/{num_images}") from e
+            return (i, slide_video)
+
+        slide_videos = [None] * num_images  # type: List[Optional[str]]
+        if max_workers == 1:
+            for i, img_path in enumerate(normalized_image_paths):
+                _i, path = _create_one_slide((i, img_path))
+                slide_videos[_i] = path
                 if progress_callback:
-                    progress_callback(i + 1, num_images)
-            except subprocess.CalledProcessError as e:
-                stderr_output = e.stderr if isinstance(e.stderr, str) else (e.stderr.decode('utf-8', errors='replace') if e.stderr else "")
-                error_msg = f"ffmpeg failed creating slide {i+1} with code {e.returncode}"
-                if stderr_output:
-                    error_msg += f"\nSTDERR: {stderr_output}"
-                error_msg += f"\nCommand: {' '.join(cmd)}"
-                raise RuntimeError(error_msg) from e
-        
+                    progress_callback(_i + 1, num_images)
+        else:
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = {executor.submit(_create_one_slide, (i, img_path)): i for i, img_path in enumerate(normalized_image_paths)}
+                done = 0
+                for future in as_completed(futures):
+                    i, path = future.result()
+                    slide_videos[i] = path
+                    done += 1
+                    if progress_callback:
+                        progress_callback(done, num_images)
+        slide_videos = [p for p in slide_videos if p is not None]
+
         # Concatenate all slide videos
         concat_file = os.path.join(tmpdir, "concat.txt")
         with open(concat_file, "w", encoding="utf-8") as f:
@@ -757,8 +761,8 @@ def _render_type_a(
     W, H = 1080, 1920
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        filters: List[str] = []
-        input_args = ["-stream_loop", "-1", "-i", os.path.abspath(image_path).replace("\\", "/")]
+        filters: List[str] = ["loop=-1:1:0", "setpts=N/30/TB"]
+        input_args = ["-i", os.path.abspath(image_path).replace("\\", "/")]
 
         ken_burns = diversification.get("ken_burns", False)
         if ken_burns:
@@ -816,8 +820,8 @@ def _render_type_b(
         text_animation = "line_by_line"
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        filters: List[str] = []
-        input_args = ["-stream_loop", "-1", "-i", os.path.abspath(image_path).replace("\\", "/")]
+        filters: List[str] = ["loop=-1:1:0", "setpts=N/30/TB"]
+        input_args = ["-i", os.path.abspath(image_path).replace("\\", "/")]
 
         filters.append(f"scale={W}:{H}:force_original_aspect_ratio=decrease")
         filters.append(f"pad={W}:{H}:(ow-iw)/2:(oh-ih)/2:color=black")
