@@ -8,6 +8,7 @@ import {
   DialogContent,
   DialogActions,
   FormControl,
+  FormControlLabel,
   InputLabel,
   Select,
   MenuItem,
@@ -15,6 +16,8 @@ import {
   Typography,
   Alert,
   CircularProgress,
+  Checkbox,
+  Collapse,
 } from '@mui/material'
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome'
 
@@ -35,7 +38,25 @@ export default function AutoGenerateButton({ onSuccess }: AutoGenerateButtonProp
   const [fandom, setFandom] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [result, setResult] = useState<{ created: number; accountsUsed?: number; errors?: string[] } | null>(null)
+  const [result, setResult] = useState<{
+    created: number
+    accountsUsed?: number
+    errors?: string[]
+    debug?: {
+      subcategoriesInDb: string[]
+      subcategoriesFromGcs?: string[]
+      summary?: string
+      failedTemplates: Array<{
+        template_id: string
+        raw_tags: unknown
+        normalized_tags: string[]
+        candidate_tags: string[]
+        subcategories: string[]
+      }>
+    }
+  } | null>(null)
+  const [includeDebug, setIncludeDebug] = useState(false)
+  const [showDebug, setShowDebug] = useState(false)
 
   const handleGenerate = async () => {
     if (!fandom) {
@@ -49,7 +70,7 @@ export default function AutoGenerateButton({ onSuccess }: AutoGenerateButtonProp
       const res = await fetch('/api/jobs/auto-generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ fandom }),
+        body: JSON.stringify({ fandom, debug: includeDebug }),
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) {
@@ -60,7 +81,9 @@ export default function AutoGenerateButton({ onSuccess }: AutoGenerateButtonProp
         created: data.created?.length ?? 0,
         accountsUsed: data.accountsUsed,
         errors: data.errors,
+        debug: data.debug,
       })
+      if (data.debug) setShowDebug(true)
       if (data.created?.length) {
         onSuccess?.()
       }
@@ -112,6 +135,15 @@ export default function AutoGenerateButton({ onSuccess }: AutoGenerateButtonProp
                 ))}
               </Select>
             </FormControl>
+            <FormControlLabel
+              control={
+                <Checkbox
+                  checked={includeDebug}
+                  onChange={(e) => setIncludeDebug(e.target.checked)}
+                />
+              }
+              label="Include debug info (shows template tags vs asset subcategories when no jobs created)"
+            />
             {error && (
               <Alert severity="error" onClose={() => setError(null)}>
                 {error}
@@ -139,6 +171,45 @@ export default function AutoGenerateButton({ onSuccess }: AutoGenerateButtonProp
                   </Box>
                 ) : null}
               </Alert>
+            )}
+            {result?.debug && (
+              <Box sx={{ mt: 2 }}>
+                <Button size="small" onClick={() => setShowDebug((v) => !v)}>
+                  {showDebug ? 'Hide' : 'Show'} debug
+                </Button>
+                <Collapse in={showDebug}>
+                  <Box sx={{ mt: 1, p: 1.5, bgcolor: 'grey.100', borderRadius: 1, overflow: 'auto' }}>
+                    {result.debug.summary && (
+                      <Alert severity="info" sx={{ mb: 1.5 }}>
+                        {result.debug.summary}
+                      </Alert>
+                    )}
+                    <Typography variant="caption" fontWeight="bold" display="block">
+                      Character folders used for matching (DB + bucket when GCS configured):
+                    </Typography>
+                    <Typography variant="body2" component="pre" sx={{ whiteSpace: 'pre-wrap', fontSize: '0.75rem' }}>
+                      {result.debug.subcategoriesInDb?.length
+                        ? result.debug.subcategoriesInDb.join(', ')
+                        : '(none)'}
+                    </Typography>
+                    {result.debug.subcategoriesFromGcs?.length ? (
+                      <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.5 }}>
+                        From GCS bucket structure: {result.debug.subcategoriesFromGcs.join(', ')}
+                      </Typography>
+                    ) : null}
+                    {result.debug.failedTemplates?.length > 0 && (
+                      <>
+                        <Typography variant="caption" fontWeight="bold" sx={{ mt: 1 }} display="block">
+                          First failed template (tags vs subcategories):
+                        </Typography>
+                        <Typography variant="body2" component="pre" sx={{ whiteSpace: 'pre-wrap', fontSize: '0.7rem' }}>
+                          {JSON.stringify(result.debug.failedTemplates[0], null, 2)}
+                        </Typography>
+                      </>
+                    )}
+                  </Box>
+                </Collapse>
+              </Box>
             )}
           </Box>
         </DialogContent>

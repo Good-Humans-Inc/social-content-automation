@@ -512,17 +512,12 @@ def create_video_from_images(
                 audio_path_normalized = audio_path.replace("\\", "/")
                 cmd.extend(["-i", audio_path_normalized])
             cmd.extend([
-                "-c:v", "libx264",
-                "-preset", "veryfast",
-                "-crf", "18",
-                "-pix_fmt", "yuv420p",
-                "-r", "30",  # Ensure consistent 30fps for TikTok
-                "-g", "60",  # GOP size (2 seconds at 30fps) for better seeking
+                "-c:v", "copy",
                 "-c:a", "aac",
                 "-b:a", "192k",
             ])
             if audio_path and os.path.exists(audio_path):
-                cmd.extend(["-map", "0:v:0", "-map", "1:a:0", "-shortest"])  # video length wins, cut music
+                cmd.extend(["-map", "0:v:0", "-map", "1:a:0", "-shortest"])
             cmd.extend([
                 "-movflags", "+faststart",  # Fast start for web streaming/TikTok upload
                 output_path_normalized,
@@ -643,17 +638,12 @@ def create_video_from_images(
             audio_path_normalized = audio_path.replace("\\", "/")
             cmd.extend(["-i", audio_path_normalized])
         cmd.extend([
-            "-c:v", "libx264",
-            "-preset", "veryfast",
-            "-crf", "18",
-            "-pix_fmt", "yuv420p",
-            "-r", "30",  # Ensure consistent 30fps for TikTok
-            "-g", "60",  # GOP size (2 seconds at 30fps) for better seeking
+            "-c:v", "copy",
             "-c:a", "aac",
             "-b:a", "192k",
         ])
         if audio_path and os.path.exists(audio_path):
-            cmd.extend(["-map", "0:v:0", "-map", "1:a:0", "-shortest"])  # video length wins, cut music
+            cmd.extend(["-map", "0:v:0", "-map", "1:a:0", "-shortest"])
         cmd.extend([
             "-movflags", "+faststart",  # Fast start for web streaming/TikTok upload
             output_path_normalized,

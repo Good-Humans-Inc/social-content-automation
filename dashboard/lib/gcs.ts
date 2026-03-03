@@ -52,7 +52,7 @@ export async function uploadToGcs(
   buffer: Buffer,
   contentType: string
 ): Promise<string> {
-  const { Storage } = await import('@google-cloud/storage')
+  const { Storage } = await import(/* webpackIgnore: true */ '@google-cloud/storage')
   const storage = new Storage(getStorageOptions())
   const bucket = storage.bucket(bucketName)
   const file = bucket.file(objectPath)
@@ -61,4 +61,38 @@ export async function uploadToGcs(
     metadata: { cacheControl: 'public, max-age=3600' },
   })
   return `https://storage.googleapis.com/${bucketName}/${objectPath}`
+}
+
+/**
+ * List subfolder names (subcategories) under assets/{category}/ in the images bucket.
+ * Uses the bucket structure as source of truth (e.g. assets/jjk/kasumi_miwa/ -> kasumi_miwa).
+ * Returns empty array if GCS is not configured or listing fails.
+ */
+export async function listSubcategoriesFromGcs(category: string): Promise<string[]> {
+  if (!isGcsConfigured()) return []
+  const bucketName = getGcsBucketImages()
+  const prefix = `assets/${category}/`
+  try {
+    const { Storage } = await import(/* webpackIgnore: true */ '@google-cloud/storage')
+    const storage = new Storage(getStorageOptions())
+    const bucket = storage.bucket(bucketName)
+    const [files] = await bucket.getFiles({
+      prefix,
+      maxResults: 2000,
+      autoPaginate: false,
+    })
+    const subcategories = new Set<string>()
+    for (const file of files || []) {
+      const name = typeof (file as any).name === 'string' ? (file as any).name : (file as any).metadata?.name ?? ''
+      const afterPrefix = name.startsWith(prefix) ? name.slice(prefix.length) : name
+      const segment = afterPrefix.split('/')[0]
+      if (segment && segment !== '') {
+        subcategories.add(segment)
+      }
+    }
+    return Array.from(subcategories).sort()
+  } catch (err) {
+    console.error('[GCS] listSubcategories failed:', err)
+    return []
+  }
 }

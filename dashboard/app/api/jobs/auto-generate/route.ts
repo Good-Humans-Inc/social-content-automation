@@ -1,5 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import { NextRequest, NextResponse } from 'next/server'
+import { listSubcategoriesFromGcs, isGcsConfigured } from '@/lib/gcs'
 
 const IMAGES_PER_VIDEO = 35
 const PREFERRED_MUSIC_GENRE = 'phonk'
@@ -31,24 +32,54 @@ function normalizeForMatch(s: string): string {
   return (s || '').toLowerCase().replace(/[\s_\-]+/g, '')
 }
 
+/** Ensure tags are a flat array of individual tag strings (handles DB returning string or comma-separated) */
+function normalizeTemplateTags(tags: string[] | string | null | undefined): string[] {
+  if (tags == null) return []
+  const arr = Array.isArray(tags) ? tags : [tags]
+  const flat: string[] = []
+  for (const t of arr) {
+    const s = (t || '').trim()
+    if (!s) continue
+    if (s.includes(',')) {
+      flat.push(...s.split(',').map((x) => x.trim()).filter(Boolean))
+    } else {
+      flat.push(s)
+    }
+  }
+  return flat
+}
+
+/** True if template has a tag that matches the selected fandom category (e.g. #jjk when fandom is jjk) */
+function tagsContainFandomCategory(tags: string[] | string | null | undefined, fandomCategory: string): boolean {
+  const normalized = normalizeTemplateTags(tags)
+  const want = fandomCategory.toLowerCase()
+  for (const tag of normalized) {
+    const raw = (tag || '').replace(/^#/, '').trim().toLowerCase()
+    if (!raw) continue
+    const norm = normalizeForMatch(raw)
+    if (norm === want || norm === want.replace(/_/g, '')) return true
+  }
+  return false
+}
+
 /**
  * Extract character subcategory from template tags by matching asset subcategories.
  * Uses flexible matching so "#inumaki" matches subcategory "toge_inumaki", "#miwa" matches "kasumi_miwa", etc.
  * Returns the actual subcategory value from the DB for use in asset queries.
  */
 function findCharacterFromTags(
-  templateTags: string[] | null | undefined,
+  templateTags: string[] | string | null | undefined,
   subcategories: string[]
 ): string | null {
-  if (!templateTags?.length || !subcategories.length) return null
-  for (const tag of templateTags) {
+  const tags = normalizeTemplateTags(templateTags)
+  if (!tags.length || !subcategories.length) return null
+  for (const tag of tags) {
     const raw = (tag || '').replace(/^#/, '').trim().toLowerCase()
     if (!raw || NON_CHARACTER_TAGS.has(raw)) continue
     const normTag = normalizeForMatch(raw)
     for (const subcat of subcategories) {
       if (!subcat || subcat === 'other' || subcat === 'general') continue
       const normSubcat = normalizeForMatch(subcat)
-      // Exact match, or subcategory contains tag (#inumaki -> toge_inumaki), or tag contains subcategory
       if (normTag === normSubcat || normSubcat.includes(normTag) || normTag.includes(normSubcat)) {
         return subcat
       }
@@ -71,7 +102,7 @@ export async function POST(request: NextRequest) {
   try {
     const supabase = await createClient()
     const body = await request.json().catch(() => ({}))
-    const { fandom: fandomFilter } = body
+    const { fandom: fandomFilter, debug: debugMode } = body
 
     const fandomCategory = typeof fandomFilter === 'string' && fandomFilter.trim() ? fandomFilter.trim().toLowerCase() : null
     if (!fandomCategory) {
@@ -106,7 +137,12 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: templatesError.message }, { status: 500 })
     }
 
-    const filtered = (templates || []).filter((t) => getAssetsCategory(t.fandom) === fandomCategory)
+    // Include templates whose fandom maps to this category OR who have a tag matching the fandom (e.g. #jjk)
+    const filtered = (templates || []).filter(
+      (t) =>
+        getAssetsCategory(t.fandom) === fandomCategory ||
+        tagsContainFandomCategory(t.tags, fandomCategory)
+    )
     const rapidTemplates = filtered.filter(
       (t) =>
         Array.isArray(t.overlay) &&
@@ -146,49 +182,111 @@ export async function POST(request: NextRequest) {
 
     const created: { job_id: string; template_id: string; character?: string; account_id: string }[] = []
     const errors: string[] = []
+    const debugInfo: {
+      subcategoriesInDb: string[]
+      subcategoriesFromGcs?: string[]
+      summary?: string
+      failedTemplates: Array<{
+        template_id: string
+        raw_tags: unknown
+        normalized_tags: string[]
+        candidate_tags: string[]
+        subcategories: string[]
+      }>
+    } = { subcategoriesInDb: [], failedTemplates: [] }
+
+    // Fetch subcategories once for the selected category (reuse for all templates + optional debug)
+    // Include all category aliases that map to this fandom (e.g. jjk and jujutsu_kaisen)
+    const categoryAliases = [
+      fandomCategory,
+      ...Object.entries(FANDOM_TO_CATEGORY)
+        .filter(([, v]) => v === fandomCategory)
+        .map(([k]) => k),
+    ]
+    const { data: subcatRows } = await supabase
+      .from('assets')
+      .select('subcategory')
+      .in('category', categoryAliases)
+      .not('subcategory', 'is', null)
+
+    let subcategories = Array.from(
+      new Set(
+        (subcatRows || [])
+          .map((r: any) => r.subcategory)
+          .filter(
+            (s: string | null) =>
+              s && s !== 'other' && s !== 'general' && s !== fandomCategory
+          )
+      )
+    )
+    // When GCS is configured, merge in subcategories from bucket structure (assets/{category}/{subcategory}/)
+    let subcategoriesFromGcs: string[] = []
+    if (isGcsConfigured()) {
+      subcategoriesFromGcs = await listSubcategoriesFromGcs(fandomCategory)
+      if (subcategoriesFromGcs.length > 0) {
+        subcategories = Array.from(new Set([...subcategories, ...subcategoriesFromGcs])).filter(
+          (s) => s && s !== 'other' && s !== 'general' && s !== fandomCategory
+        )
+      }
+    }
+    if (debugMode) {
+      debugInfo.subcategoriesInDb = [...subcategories].sort()
+      if (subcategoriesFromGcs.length > 0) {
+        debugInfo.subcategoriesFromGcs = subcategoriesFromGcs.sort()
+      }
+    }
 
     // Process each unused template once; assign jobs to accounts in round-robin so each gets ~1–2 for daily upload
     for (const template of candidateTemplates) {
-      const category = getAssetsCategory(template.fandom)
-
-      // Get subcategories for this category
-      const { data: subcatRows } = await supabase
-        .from('assets')
-        .select('subcategory')
-        .eq('category', category)
-        .not('subcategory', 'is', null)
-
-      const subcategories = Array.from(
-        new Set(
-          (subcatRows || [])
-            .map((r: any) => r.subcategory)
-            .filter(
-              (s: string | null) =>
-                s && s !== 'other' && s !== 'general' && s !== category
-            )
-        )
-      )
+      const category = fandomCategory
 
       const character = findCharacterFromTags(template.tags, subcategories)
       if (!character) {
         errors.push(`Template ${template.id}: no character found in tags for category ${category}`)
+        if (debugMode) {
+          const normalized = normalizeTemplateTags(template.tags)
+          const candidateTags = normalized
+            .map((t) => (t || '').replace(/^#/, '').trim().toLowerCase())
+            .filter((r) => r && !NON_CHARACTER_TAGS.has(r))
+          debugInfo.failedTemplates.push({
+            template_id: template.id,
+            raw_tags: template.tags,
+            normalized_tags: normalized,
+            candidate_tags: candidateTags,
+            subcategories: [...subcategories],
+          })
+        }
         continue
       }
 
-      // Fetch enough image assets for this character
-      const { data: imageAssets, error: assetsError } = await supabase
+      // Fetch image assets: first by category+subcategory, then by storage_path prefix (bucket structure) if needed
+      let imageAssets: { id: string }[] | null = null
+      let assetsError: { message: string } | null = null
+      const byCategory = await supabase
         .from('assets')
         .select('id')
-        .eq('category', category)
+        .in('category', categoryAliases)
         .eq('subcategory', character)
         .limit(500)
+      imageAssets = byCategory.data
+      assetsError = byCategory.error
+      let ids = (imageAssets || []).map((a: any) => a.id)
+      if (ids.length < IMAGES_PER_VIDEO) {
+        const pathPrefix = `assets/${category}/${character}/`
+        const byPath = await supabase
+          .from('assets')
+          .select('id')
+          .like('storage_path', `${pathPrefix}%`)
+          .limit(500)
+        if (byPath.data?.length) {
+          ids = byPath.data.map((a: any) => a.id)
+        }
+      }
 
       if (assetsError) {
         errors.push(`Template ${template.id}: ${assetsError.message}`)
         continue
       }
-
-      const ids = (imageAssets || []).map((a: any) => a.id)
       if (ids.length < IMAGES_PER_VIDEO) {
         if (ids.length === 0) {
           errors.push(
@@ -255,6 +353,15 @@ export async function POST(request: NextRequest) {
       })
     }
 
+    if (debugMode && debugInfo.failedTemplates.length > 0) {
+      const have = debugInfo.subcategoriesInDb.length
+        ? debugInfo.subcategoriesInDb.join(', ')
+        : 'none'
+      const first = debugInfo.failedTemplates[0]
+      const want = first?.candidate_tags?.length ? first.candidate_tags.join(', ') : '?'
+      debugInfo.summary = `Templates use character tags (e.g. #choso, #yuji). A job is only created when that character exists in your assets. Your assets for this fandom have character folders: ${have}. This template wants one of: ${want}. Scrape those characters (e.g. in Assets or via your scraper) so their folder appears in the list, then run Auto Generate again.`
+    }
+
     return NextResponse.json({
       created,
       errors: errors.length > 0 ? errors : undefined,
@@ -263,6 +370,7 @@ export async function POST(request: NextRequest) {
         created.length > 0
           ? `Created ${created.length} video job(s) across ${accounts.length} account(s) (1–2 per account for daily upload).${errors.length > 0 ? ` ${errors.length} skipped.` : ''}`
           : 'No jobs created.',
+      ...(debugMode && { debug: debugInfo }),
     })
   } catch (error: any) {
     return NextResponse.json(
