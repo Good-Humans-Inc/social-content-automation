@@ -482,7 +482,7 @@ export class GeeLarkClient {
     const response = await fetch(`${this.apiBase}/open/v1/task/query`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ taskIds }),
+      body: JSON.stringify({ Ids: taskIds }),
     })
     const data = await response.json().catch(() => ({}))
     if (!response.ok) {
