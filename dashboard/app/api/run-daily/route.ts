@@ -135,10 +135,7 @@ export async function POST(request: NextRequest) {
         .is('posted_at', null)
         .order('created_at', { ascending: true })
 
-      const allAvailable = (readyVideos || []) as Array<{
-        id: string; template_id: string; video_url: string; created_at: string;
-        templates?: { caption: string; fandom: string; intensity: string } | null
-      }>
+      const allAvailable = ((readyVideos || []) as unknown) as VideoDetail[]
 
       // Default selection: first N where N = remaining (or overridden)
       const accountOverride = overrides?.[account.id]
