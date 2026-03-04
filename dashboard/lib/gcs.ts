@@ -7,6 +7,7 @@
  */
 
 import { existsSync } from 'fs'
+import { Storage } from '@google-cloud/storage'
 
 const BUCKET_IMAGES = process.env.GCS_BUCKET_IMAGES || 'babymilu-images'
 const BUCKET_MUSIC = process.env.GCS_BUCKET_MUSIC || 'babymilu-musics'
@@ -78,7 +79,6 @@ export async function uploadToGcs(
   const opts = getStorageOptions()
   const authMethod = opts.keyFilename ? `keyFile(${opts.keyFilename})` : opts.credentials ? 'inline-json' : 'none'
   console.log(`[GCS] uploadToGcs called — bucket=${bucketName}, path=${objectPath}, size=${buffer.length}b, contentType=${contentType}, auth=${authMethod}`)
-  const { Storage } = await import(/* webpackIgnore: true */ '@google-cloud/storage')
   const storage = new Storage(opts)
   const bucket = storage.bucket(bucketName)
   const file = bucket.file(objectPath)
@@ -102,7 +102,6 @@ export async function listSubcategoriesFromGcs(category: string): Promise<string
   const bucketName = getGcsBucketImages()
   const prefix = `assets/${category}/`
   try {
-    const { Storage } = await import(/* webpackIgnore: true */ '@google-cloud/storage')
     const storage = new Storage(getStorageOptions())
     const bucket = storage.bucket(bucketName)
     const [files] = await bucket.getFiles({
