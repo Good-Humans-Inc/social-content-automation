@@ -227,9 +227,10 @@ export async function mergeDuplicateFandoms(): Promise<{
   }
 
   // Group fandoms by normalized key (same key = duplicates)
-  const groupByKey = new Map<string, typeof fandoms>()
+  type FandomRow = { id: string; short_id: string; display_name: string; full_name: string; aliases?: string[] }
+  const groupByKey = new Map<string, FandomRow[]>()
   for (const f of fandoms) {
-    const row = f as { id: string; short_id: string; display_name: string; full_name: string; aliases?: string[] }
+    const row: FandomRow = f as FandomRow
     const key = normalizedLookupKey(row.short_id)
     if (!key) continue
     if (!groupByKey.has(key)) groupByKey.set(key, [])
