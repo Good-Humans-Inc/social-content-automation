@@ -15,11 +15,11 @@ const RPA_POLL_MAX_WAIT_MS = 120_000
  * Full workflow (when fullWorkflow !== false):
  * 1. Start the cloud phone
  * 2. Wait for boot (default 30s, or bootWaitSeconds)
- * 3a. If profileViewFlowId (or GEELARK_PROFILE_VIEW_FLOW_ID) is set: run that RPA flow (e.g. Open TikTok + Click "Profile"), wait for it to finish, then take screenshot → profile screen.
+ * 3a. If profileViewFlowId (or GEELARK_PROFILE_VIEW_FLOW_ID) is set: open TikTok via startApp, wait for app to load, run that RPA flow (e.g. "Click Profile" only), wait for it to finish, then take screenshot → profile screen.
  * 3b. Else: Open TikTok app, wait for app to load, then take screenshot → For You feed.
  * 4. Take screenshot and return imageUrl.
  *
- * To get profile screen: Create an RPA task flow in GeeLark with "Open App" (com.zhiliaoapp.musically) and "Click element" (selector text, value "Profile"). Get the flow id from Task flow query API or dashboard, then set GEELARK_PROFILE_VIEW_FLOW_ID or pass profileViewFlowId in the request.
+ * For profile screen: Create an RPA flow in GeeLark with just "Click" on the Profile tab (bottom right). This app opens TikTok first, then runs your flow, then takes the screenshot. Get the flow id from the task-flows API or dashboard, then select it in "Check login - profile flow" or set GEELARK_PROFILE_VIEW_FLOW_ID.
  *
  * Returns { success, imageUrl?, taskId?, steps?: string[] }.
  */
@@ -62,10 +62,14 @@ export async function POST(request: NextRequest) {
 
       if (profileViewFlowId) {
         try {
-          steps.push('Running profile-view RPA flow (open TikTok, click Profile)...')
+          steps.push('Opening TikTok app...')
+          await client.startApp(phoneId.trim())
+          steps.push('Waiting for app to load...')
+          await new Promise((r) => setTimeout(r, appWaitMs))
+          steps.push('Running profile-view RPA flow (click Profile)...')
           const rpaTaskId = await client.addRpaTask(phoneId.trim(), profileViewFlowId, {
             name: 'check-login-profile-view',
-            remark: 'Open TikTok and navigate to Profile for screenshot',
+            remark: 'Click Profile tab for screenshot',
           })
           steps.push(`RPA task created: ${rpaTaskId}`)
           const rpaPollUntil = Date.now() + RPA_POLL_MAX_WAIT_MS
