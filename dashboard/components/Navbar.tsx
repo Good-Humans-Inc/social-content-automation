@@ -35,6 +35,7 @@ export default function Navbar() {
   const navLinks = [
     { href: '/', label: 'Dashboard' },
     { href: '/scraping', label: 'Scraping' },
+    { href: '/fandoms', label: 'Fandoms' },
     { href: '/assets', label: 'Assets' },
     { href: '/templates', label: 'Templates' },
     { href: '/accounts', label: 'Accounts' },

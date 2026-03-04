@@ -260,64 +260,78 @@ export async function POST(request: NextRequest) {
     for (const template of candidateTemplates) {
       const category = fandomCategory
 
-      const character = findCharacterFromTags(template.tags, subcategories)
-      if (!character) {
-        errors.push(`Template ${template.id}: no character found in tags for category ${category}`)
-        if (debugMode) {
-          const normalized = normalizeTemplateTags(template.tags)
-          const candidateTags = normalized
-            .map((t) => (t || '').replace(/^#/, '').trim().toLowerCase())
-            .filter((r) => r && !NON_CHARACTER_TAGS.has(r))
-          debugInfo.failedTemplates.push({
-            template_id: template.id,
-            raw_tags: template.tags,
-            normalized_tags: normalized,
-            candidate_tags: candidateTags,
-            subcategories: [...subcategories],
-          })
-        }
-        continue
-      }
-
-      // Fetch image assets: first by category+subcategory, then by storage_path prefix (bucket structure) if needed
-      let imageAssets: { id: string }[] | null = null
-      let assetsError: { message: string } | null = null
-      const byCategory = await supabase
-        .from('assets')
-        .select('id')
-        .in('category', categoryAliases)
-        .eq('subcategory', character)
+      // First try to get assets linked directly to this template (from AI-powered template scraping)
+      let ids: string[] = []
+      let character: string | null = null
+      const { data: linkedAssets, error: linkedError } = await supabase
+        .from('asset_templates')
+        .select('asset_id')
+        .eq('template_id', template.id)
         .limit(500)
-      imageAssets = byCategory.data
-      assetsError = byCategory.error
-      let ids = (imageAssets || []).map((a: any) => a.id)
-      if (ids.length < IMAGES_PER_VIDEO) {
-        const pathPrefix = `assets/${category}/${character}/`
-        const byPath = await supabase
+
+      if (!linkedError && linkedAssets && linkedAssets.length >= IMAGES_PER_VIDEO) {
+        ids = linkedAssets.map((a: any) => a.asset_id)
+        character = findCharacterFromTags(template.tags, subcategories) || 'template_linked'
+      } else {
+        // Fall back to category/subcategory matching
+        character = findCharacterFromTags(template.tags, subcategories)
+        if (!character) {
+          errors.push(`Template ${template.id}: no character found in tags for category ${category}`)
+          if (debugMode) {
+            const normalized = normalizeTemplateTags(template.tags)
+            const candidateTags = normalized
+              .map((t) => (t || '').replace(/^#/, '').trim().toLowerCase())
+              .filter((r) => r && !NON_CHARACTER_TAGS.has(r))
+            debugInfo.failedTemplates.push({
+              template_id: template.id,
+              raw_tags: template.tags,
+              normalized_tags: normalized,
+              candidate_tags: candidateTags,
+              subcategories: [...subcategories],
+            })
+          }
+          continue
+        }
+
+        let imageAssets: { id: string }[] | null = null
+        let assetsError: { message: string } | null = null
+        const byCategory = await supabase
           .from('assets')
           .select('id')
-          .like('storage_path', `${pathPrefix}%`)
+          .in('category', categoryAliases)
+          .eq('subcategory', character)
           .limit(500)
-        if (byPath.data?.length) {
-          ids = byPath.data.map((a: any) => a.id)
+        imageAssets = byCategory.data
+        assetsError = byCategory.error
+        ids = (imageAssets || []).map((a: any) => a.id)
+        if (ids.length < IMAGES_PER_VIDEO) {
+          const pathPrefix = `assets/${category}/${character}/`
+          const byPath = await supabase
+            .from('assets')
+            .select('id')
+            .like('storage_path', `${pathPrefix}%`)
+            .limit(500)
+          if (byPath.data?.length) {
+            ids = byPath.data.map((a: any) => a.id)
+          }
         }
-      }
 
-      if (assetsError) {
-        errors.push(`Template ${template.id}: ${assetsError.message}`)
-        continue
-      }
-      if (ids.length < IMAGES_PER_VIDEO) {
-        if (ids.length === 0) {
-          errors.push(
-            `Skipped: character "${character}" not scraped yet – no images in assets. Scrape this character first, then try again.`
-          )
-        } else {
-          errors.push(
-            `Skipped: character "${character}" has too few images (need ${IMAGES_PER_VIDEO}, found ${ids.length}). Scrape more assets for this character.`
-          )
+        if (assetsError) {
+          errors.push(`Template ${template.id}: ${assetsError.message}`)
+          continue
         }
-        continue
+        if (ids.length < IMAGES_PER_VIDEO) {
+          if (ids.length === 0) {
+            errors.push(
+              `Skipped: character "${character}" not scraped yet – no images in assets. Scrape this character first, then try again.`
+            )
+          } else {
+            errors.push(
+              `Skipped: character "${character}" has too few images (need ${IMAGES_PER_VIDEO}, found ${ids.length}). Scrape more assets for this character.`
+            )
+          }
+          continue
+        }
       }
 
       const selectedIds = shuffleAndTake(ids, IMAGES_PER_VIDEO)

@@ -1,7 +1,7 @@
 'use client'
 
-import { useState } from 'react'
-import { animeConfigs, generatePinterestUrl, generateGoogleImagesUrl, type AnimeConfig } from '../lib/animeConfig'
+import { useState, useEffect } from 'react'
+import { animeConfigs as staticAnimeConfigs, generatePinterestUrl, generateGoogleImagesUrl, type AnimeConfig } from '../lib/animeConfig'
 import {
   Paper,
   Typography,
@@ -15,10 +15,38 @@ import {
   Box,
   Checkbox,
   Stack,
+  Select,
+  MenuItem,
+  InputLabel,
+  Alert,
+  Chip,
+  LinearProgress,
+  Table,
+  TableHead,
+  TableBody,
+  TableRow,
+  TableCell,
+  IconButton,
+  Collapse,
 } from '@mui/material'
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
+import ExpandLessIcon from '@mui/icons-material/ExpandLess'
+import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh'
+import DeleteSweepIcon from '@mui/icons-material/DeleteSweep'
 
 type SourceType = 'pinterest' | 'google_images'
-type InputMode = 'manual' | 'anime_selection'
+type InputMode = 'manual' | 'anime_selection' | 'template_scrape'
+
+interface QueuedTemplate {
+  template_id: string
+  search_query: string
+  pinterest_url: string
+}
+
+interface QueueStatus {
+  pending: number
+  items: { template_id: string; search_terms: string[]; created_at: number }[]
+}
 
 export default function ScrapingControl() {
   const [sourceType, setSourceType] = useState<SourceType>('pinterest')
@@ -27,9 +55,80 @@ export default function ScrapingControl() {
   const [googleSearchTerms, setGoogleSearchTerms] = useState('')
   const [maxPosts, setMaxPosts] = useState<string>('200')
   const [loading, setLoading] = useState(false)
-  
+
+  // Dynamic anime configs from DB (falls back to static)
+  const [animeConfigs, setAnimeConfigs] = useState<AnimeConfig[]>(staticAnimeConfigs)
+
   // Anime selection state
   const [selectedCharacters, setSelectedCharacters] = useState<Record<string, Set<string>>>({})
+
+  // Template scrape state
+  const [templateFandom, setTemplateFandom] = useState<string>('')
+  const [templateIntensity, setTemplateIntensity] = useState<string>('T0')
+  const [templateLoading, setTemplateLoading] = useState(false)
+  const [queuedTemplates, setQueuedTemplates] = useState<QueuedTemplate[]>([])
+  const [queueStatus, setQueueStatus] = useState<QueueStatus | null>(null)
+  const [templateError, setTemplateError] = useState<string | null>(null)
+  const [showQueueDetails, setShowQueueDetails] = useState(false)
+  const [fandomList, setFandomList] = useState<string[]>([])
+
+  // Fetch dynamic fandom/character config from DB
+  useEffect(() => {
+    const fetchConfigs = async () => {
+      try {
+        const res = await fetch('/api/fandoms/config')
+        if (res.ok) {
+          const data = await res.json()
+          if (data.config && Array.isArray(data.config) && data.config.length > 0) {
+            setAnimeConfigs(data.config)
+          }
+        }
+      } catch {
+        // Keep static fallback
+      }
+    }
+    fetchConfigs()
+  }, [])
+
+  // Fetch fandoms from API (same list as Templates page) when in template scrape mode
+  useEffect(() => {
+    if (inputMode !== 'template_scrape') return
+    const fetchFandoms = async () => {
+      try {
+        const intensity = templateIntensity || undefined
+        const url = intensity ? `/api/templates/fandoms?intensity=${encodeURIComponent(intensity)}` : '/api/templates/fandoms'
+        const res = await fetch(url)
+        if (res.ok) {
+          const data = await res.json()
+          setFandomList(data.fandoms || [])
+        }
+      } catch {
+        setFandomList([])
+      }
+    }
+    fetchFandoms()
+  }, [inputMode, templateIntensity])
+
+  // Poll queue status when in template mode
+  useEffect(() => {
+    if (inputMode !== 'template_scrape') return
+    
+    const fetchStatus = async () => {
+      try {
+        const res = await fetch('/api/scraping/template-scrape')
+        if (res.ok) {
+          const data = await res.json()
+          setQueueStatus(data.queue_status)
+        }
+      } catch {
+        // ignore polling errors
+      }
+    }
+
+    fetchStatus()
+    const interval = setInterval(fetchStatus, 5000)
+    return () => clearInterval(interval)
+  }, [inputMode])
 
   // Handle character selection
   const handleCharacterToggle = (animeId: string, character: string) => {
@@ -44,7 +143,6 @@ export default function ScrapingControl() {
     })
   }
 
-  // Handle select all characters for an anime
   const handleSelectAll = (anime: AnimeConfig) => {
     const allCharacters = new Set(anime.characters)
     setSelectedCharacters(prev => ({
@@ -53,7 +151,6 @@ export default function ScrapingControl() {
     }))
   }
 
-  // Handle deselect all characters for an anime
   const handleDeselectAll = (animeId: string) => {
     setSelectedCharacters(prev => {
       const updated = { ...prev }
@@ -62,147 +159,144 @@ export default function ScrapingControl() {
     })
   }
 
+  const handleTemplateScrape = async () => {
+    setTemplateLoading(true)
+    setTemplateError(null)
+    setQueuedTemplates([])
+
+    try {
+      const body: any = {}
+      if (templateFandom) body.fandom = templateFandom
+      if (templateIntensity) body.intensity = templateIntensity
+      body.limit = 'all'
+
+      const res = await fetch('/api/scraping/template-scrape', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+
+      const data = await res.json()
+
+      if (!res.ok) {
+        setTemplateError(data.error || 'Failed to generate template scraping tasks')
+        return
+      }
+
+      setQueuedTemplates(data.queued || [])
+      setQueueStatus(data.queue_status || null)
+
+      if (data.errors?.length) {
+        setTemplateError(`${data.queued?.length || 0} queued, ${data.errors.length} failed: ${data.errors[0]}`)
+      }
+    } catch (err) {
+      setTemplateError(err instanceof Error ? err.message : 'Unknown error')
+    } finally {
+      setTemplateLoading(false)
+    }
+  }
+
+  const handleClearQueue = async () => {
+    try {
+      await fetch('/api/scraping/trigger', { method: 'DELETE' })
+      setQueueStatus(null)
+      setQueuedTemplates([])
+    } catch {
+      // ignore
+    }
+  }
+
   const handleStart = async () => {
-    console.log('[DEBUG] handleStart called')
-    console.log('[DEBUG] State:', {
-      sourceType,
-      inputMode,
-      maxPosts,
-      selectedCharacters,
-      pinterestUrls: pinterestUrls.substring(0, 50) + '...',
-      googleSearchTerms: googleSearchTerms.substring(0, 50) + '...'
-    })
-    
     setLoading(true)
     try {
       let targetUrls: string[] = []
       let searchTerms: string[] = []
 
       if (inputMode === 'anime_selection') {
-        console.log('[DEBUG] Anime selection mode - generating URLs')
-        // Generate URLs from selected characters
         for (const anime of animeConfigs) {
           const selected = selectedCharacters[anime.id] || new Set()
-          console.log(`[DEBUG] Anime ${anime.id}: ${selected.size} characters selected`)
           for (const character of selected) {
             if (sourceType === 'pinterest') {
               const url = generatePinterestUrl(anime, character)
-              console.log(`[DEBUG] Generated Pinterest URL for ${anime.id} - ${character}:`, url)
               targetUrls.push(url)
             } else if (sourceType === 'google_images') {
               const url = generateGoogleImagesUrl(anime, character)
-              console.log(`[DEBUG] Generated Google Images URL for ${anime.id} - ${character}:`, url)
               targetUrls.push(url)
               searchTerms.push(`${anime.fullName} ${character}`)
             }
           }
         }
         
-        console.log(`[DEBUG] Total URLs generated: ${targetUrls.length}`)
         if (targetUrls.length === 0) {
-          console.log('[DEBUG] No characters selected, showing alert')
           alert('Please select at least one character to scrape')
           setLoading(false)
           return
         }
       } else if (sourceType === 'pinterest') {
-        console.log('[DEBUG] Manual Pinterest mode')
         targetUrls = pinterestUrls
           .split('\n')
           .map((url) => url.trim())
           .filter((url) => url.length > 0 && url.includes('pinterest.com'))
         
-        console.log(`[DEBUG] Parsed ${targetUrls.length} Pinterest URLs`)
         if (targetUrls.length === 0) {
-          console.log('[DEBUG] No valid URLs, showing alert')
           alert('Please enter at least one valid Pinterest URL')
           setLoading(false)
           return
         }
       } else {
-        console.log('[DEBUG] Google Images mode')
-        // Google Images - convert search terms to URLs
         searchTerms = googleSearchTerms
           .split('\n')
           .map((term) => term.trim())
           .filter((term) => term.length > 0)
         
-        console.log(`[DEBUG] Parsed ${searchTerms.length} search terms`)
         if (searchTerms.length === 0) {
-          console.log('[DEBUG] No search terms, showing alert')
           alert('Please enter at least one search term')
           setLoading(false)
           return
         }
 
-        // Convert search terms to Google Images search URLs
         targetUrls = searchTerms.map(term => {
           const encoded = encodeURIComponent(term)
           return `https://www.google.com/search?q=${encoded}&tbm=isch`
         })
-        console.log(`[DEBUG] Generated ${targetUrls.length} Google Images URLs`)
       }
 
-      // Parse max posts (default to 200 if invalid)
       const maxPostsNum = parseInt(maxPosts) || 200
-      console.log(`[DEBUG] Max posts: ${maxPostsNum}`)
       if (maxPostsNum < 1) {
-        console.log('[DEBUG] Invalid max posts, showing alert')
         alert('Max posts must be at least 1')
         setLoading(false)
         return
       }
 
-      const requestBody = {
-        target_urls: targetUrls,
-        source_type: sourceType,
-        search_terms: sourceType === 'google_images' ? searchTerms : [],
-        max_posts: maxPostsNum,
-      }
-      
-      console.log('[DEBUG] Sending request to /api/scraping/trigger')
-      console.log('[DEBUG] Request body:', JSON.stringify(requestBody, null, 2))
-
-      // Trigger extension directly - no job queue
       const response = await fetch('/api/scraping/trigger', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(requestBody),
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          target_urls: targetUrls,
+          source_type: sourceType,
+          search_terms: sourceType === 'google_images' ? searchTerms : [],
+          max_posts: maxPostsNum,
+        }),
       })
 
-      console.log('[DEBUG] Response status:', response.status)
-      console.log('[DEBUG] Response ok:', response.ok)
-
       if (response.ok) {
-        const responseData = await response.json()
-        console.log('[DEBUG] Response data:', responseData)
-        
         setPinterestUrls('')
         setGoogleSearchTerms('')
-        // Clear selected characters after successful start
         if (inputMode === 'anime_selection') {
           setSelectedCharacters({})
         }
         
-        // Show success message
         const characterCount = inputMode === 'anime_selection' 
           ? Object.values(selectedCharacters).reduce((sum, chars) => sum + chars.size, 0)
           : targetUrls.length
-        console.log(`[DEBUG] Success! Starting scraping for ${characterCount} character(s)`)
         alert(`Starting scraping for ${characterCount} character(s)! The extension will scrape ${maxPostsNum} images per character.`)
       } else {
         const error = await response.json()
-        console.error('[DEBUG] Error response:', error)
         alert(`Failed to trigger scraping: ${error.error || 'Unknown error'}`)
       }
     } catch (error) {
-      console.error('[DEBUG] Exception caught:', error)
-      console.error('Error starting scraping job:', error)
       alert(`Error starting scraping job: ${error instanceof Error ? error.message : 'Unknown error'}`)
     } finally {
-      console.log('[DEBUG] Setting loading to false')
       setLoading(false)
     }
   }
@@ -213,33 +307,160 @@ export default function ScrapingControl() {
         Start New Scraping Job
       </Typography>
       
-      {/* Source Type Selector */}
-      <FormControl sx={{ mb: 3 }}>
-        <FormLabel>Source Type</FormLabel>
-        <RadioGroup
-          row
-          value={sourceType}
-          onChange={(e) => {
-            setSourceType(e.target.value as SourceType)
-          }}
-        >
-          <FormControlLabel value="pinterest" control={<Radio />} label="Pinterest" />
-          <FormControlLabel value="google_images" control={<Radio />} label="Google Images" />
-        </RadioGroup>
-      </FormControl>
-
       {/* Input Mode Selector */}
       <FormControl sx={{ mb: 3 }}>
-        <FormLabel>Input Mode</FormLabel>
+        <FormLabel>Scraping Mode</FormLabel>
         <RadioGroup
           row
           value={inputMode}
           onChange={(e) => setInputMode(e.target.value as InputMode)}
         >
           <FormControlLabel value="manual" control={<Radio />} label="Manual URLs" />
-          <FormControlLabel value="anime_selection" control={<Radio />} label="Anime & Character Selection" />
+          <FormControlLabel value="anime_selection" control={<Radio />} label="Anime & Character" />
+          <FormControlLabel
+            value="template_scrape"
+            control={<Radio />}
+            label={
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                <AutoFixHighIcon fontSize="small" />
+                Template + AI Scrape
+              </Box>
+            }
+          />
         </RadioGroup>
       </FormControl>
+
+      {/* Template AI Scrape Mode */}
+      {inputMode === 'template_scrape' && (
+        <Box sx={{ mb: 3 }}>
+          <Alert severity="info" sx={{ mb: 2 }}>
+            AI will analyze each unused template&apos;s caption, tags, and fandom to generate specific Pinterest search queries. Each template will get 35 unique images scraped and linked directly to it.
+          </Alert>
+
+          <Stack direction="row" spacing={2} sx={{ mb: 2 }} flexWrap="wrap">
+            <FormControl sx={{ minWidth: 160 }}>
+              <InputLabel>Intensity</InputLabel>
+              <Select
+                value={templateIntensity}
+                label="Intensity"
+                onChange={(e) => setTemplateIntensity(e.target.value)}
+                size="small"
+              >
+                <MenuItem value="T0">T0</MenuItem>
+                <MenuItem value="T1">T1</MenuItem>
+                <MenuItem value="T2">T2</MenuItem>
+                <MenuItem value="">All</MenuItem>
+              </Select>
+            </FormControl>
+
+            <FormControl sx={{ minWidth: 220 }}>
+              <InputLabel>Fandom (optional)</InputLabel>
+              <Select
+                value={templateFandom}
+                label="Fandom (optional)"
+                onChange={(e) => setTemplateFandom(e.target.value)}
+                size="small"
+                displayEmpty
+              >
+                <MenuItem value="">All fandoms</MenuItem>
+                {fandomList.map((f) => (
+                  <MenuItem key={f} value={f}>
+                    {f}
+                  </MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+          </Stack>
+
+          <Stack direction="row" spacing={2} sx={{ mb: 2 }}>
+            <Button
+              variant="contained"
+              onClick={handleTemplateScrape}
+              disabled={templateLoading}
+              startIcon={<AutoFixHighIcon />}
+            >
+              {templateLoading ? 'Generating...' : 'Generate & Queue Scraping'}
+            </Button>
+
+            {queueStatus && queueStatus.pending > 0 && (
+              <Button
+                variant="outlined"
+                color="error"
+                onClick={handleClearQueue}
+                startIcon={<DeleteSweepIcon />}
+              >
+                Clear Queue ({queueStatus.pending})
+              </Button>
+            )}
+          </Stack>
+
+          {templateLoading && <LinearProgress sx={{ mb: 2 }} />}
+
+          {templateError && (
+            <Alert severity="warning" sx={{ mb: 2 }}>
+              {templateError}
+            </Alert>
+          )}
+
+          {/* Queue Status */}
+          {queueStatus && queueStatus.pending > 0 && (
+            <Alert severity="success" sx={{ mb: 2 }}>
+              {queueStatus.pending} template(s) in queue. The extension will process them one by one (35 images each).
+            </Alert>
+          )}
+
+          {/* Results Table */}
+          {queuedTemplates.length > 0 && (
+            <Box>
+              <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
+                <Typography variant="subtitle2" sx={{ flexGrow: 1 }}>
+                  Queued Templates ({queuedTemplates.length})
+                </Typography>
+                <IconButton size="small" onClick={() => setShowQueueDetails(!showQueueDetails)}>
+                  {showQueueDetails ? <ExpandLessIcon /> : <ExpandMoreIcon />}
+                </IconButton>
+              </Box>
+              <Collapse in={showQueueDetails}>
+                <Table size="small">
+                  <TableHead>
+                    <TableRow>
+                      <TableCell>Template ID</TableCell>
+                      <TableCell>AI-Generated Search Query</TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {queuedTemplates.map((t) => (
+                      <TableRow key={t.template_id}>
+                        <TableCell>
+                          <Chip label={t.template_id} size="small" variant="outlined" sx={{ fontFamily: 'monospace', fontSize: '0.75rem' }} />
+                        </TableCell>
+                        <TableCell>{t.search_query}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </Collapse>
+            </Box>
+          )}
+        </Box>
+      )}
+
+      {/* Source Type Selector - only for manual/anime modes */}
+      {inputMode !== 'template_scrape' && (
+        <FormControl sx={{ mb: 3 }}>
+          <FormLabel>Source Type</FormLabel>
+          <RadioGroup
+            row
+            value={sourceType}
+            onChange={(e) => {
+              setSourceType(e.target.value as SourceType)
+            }}
+          >
+            <FormControlLabel value="pinterest" control={<Radio />} label="Pinterest" />
+            <FormControlLabel value="google_images" control={<Radio />} label="Google Images" />
+          </RadioGroup>
+        </FormControl>
+      )}
 
       {/* Anime & Character Selection */}
       {inputMode === 'anime_selection' && (
@@ -352,43 +573,48 @@ export default function ScrapingControl() {
         />
       )}
 
-      {/* Max Posts Input */}
-      <TextField
-        fullWidth
-        id="max-posts"
-        label="Max Posts to Scrape"
-        type="number"
-        inputProps={{ min: 1, max: 1000 }}
-        value={maxPosts}
-        onChange={(e) => setMaxPosts(e.target.value)}
-        placeholder="50"
-        disabled={loading}
-        sx={{ mb: 3 }}
-        helperText="Maximum number of posts to scrape per URL/character (default: 200). The scraper will auto-scroll to load more posts for both Pinterest and Google Images."
-      />
+      {/* Max Posts Input - only for manual/anime modes */}
+      {inputMode !== 'template_scrape' && (
+        <TextField
+          fullWidth
+          id="max-posts"
+          label="Max Posts to Scrape"
+          type="number"
+          inputProps={{ min: 1, max: 1000 }}
+          value={maxPosts}
+          onChange={(e) => setMaxPosts(e.target.value)}
+          placeholder="50"
+          disabled={loading}
+          sx={{ mb: 3 }}
+          helperText="Maximum number of posts to scrape per URL/character (default: 200). The scraper will auto-scroll to load more posts for both Pinterest and Google Images."
+        />
+      )}
 
-      <Box>
-        <Button
-          onClick={handleStart}
-          variant="contained"
-          disabled={
-            loading ||
-            (sourceType === 'pinterest' && inputMode === 'manual' && !pinterestUrls.trim()) ||
-            (sourceType === 'pinterest' && inputMode === 'anime_selection' && 
-              Object.values(selectedCharacters).every(chars => chars.size === 0)) ||
-            (sourceType === 'google_images' && inputMode === 'manual' && !googleSearchTerms.trim()) ||
-            (sourceType === 'google_images' && inputMode === 'anime_selection' && 
-              Object.values(selectedCharacters).every(chars => chars.size === 0))
-          }
-        >
-          {loading ? 'Starting...' : 'Start Scraping'}
-        </Button>
-        {inputMode === 'anime_selection' && (
-          <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>
-            Total characters selected: {Object.values(selectedCharacters).reduce((sum, chars) => sum + chars.size, 0)}
-          </Typography>
-        )}
-      </Box>
+      {/* Start button - only for manual/anime modes */}
+      {inputMode !== 'template_scrape' && (
+        <Box>
+          <Button
+            onClick={handleStart}
+            variant="contained"
+            disabled={
+              loading ||
+              (sourceType === 'pinterest' && inputMode === 'manual' && !pinterestUrls.trim()) ||
+              (sourceType === 'pinterest' && inputMode === 'anime_selection' && 
+                Object.values(selectedCharacters).every(chars => chars.size === 0)) ||
+              (sourceType === 'google_images' && inputMode === 'manual' && !googleSearchTerms.trim()) ||
+              (sourceType === 'google_images' && inputMode === 'anime_selection' && 
+                Object.values(selectedCharacters).every(chars => chars.size === 0))
+            }
+          >
+            {loading ? 'Starting...' : 'Start Scraping'}
+          </Button>
+          {inputMode === 'anime_selection' && (
+            <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>
+              Total characters selected: {Object.values(selectedCharacters).reduce((sum, chars) => sum + chars.size, 0)}
+            </Typography>
+          )}
+        </Box>
+      )}
     </Paper>
   )
 }

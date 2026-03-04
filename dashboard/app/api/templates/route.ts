@@ -52,8 +52,28 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: error.message }, { status: 500 })
     }
 
+    const list = data || []
+    const ids = list.map((t: { id: string }) => t.id)
+
+    let assetCountByTemplate: Record<string, number> = {}
+    if (ids.length > 0) {
+      const { data: links } = await supabase
+        .from('asset_templates')
+        .select('template_id')
+        .in('template_id', ids)
+      for (const row of links || []) {
+        const tid = (row as { template_id: string }).template_id
+        assetCountByTemplate[tid] = (assetCountByTemplate[tid] || 0) + 1
+      }
+    }
+
+    const dataWithCount = list.map((t: { id: string }) => ({
+      ...t,
+      asset_count: assetCountByTemplate[t.id] ?? 0,
+    }))
+
     return NextResponse.json({
-      data: data || [],
+      data: dataWithCount,
       pagination: {
         page,
         limit,

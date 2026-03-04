@@ -247,18 +247,22 @@ async function pollForTriggers() {
     console.log('[DEBUG] Trigger found! Starting scraping...', {
       urlCount: data.data.target_urls.length,
       sourceType: data.data.source_type,
-      maxPosts: data.data.max_posts
+      maxPosts: data.data.max_posts,
+      templateId: data.data.template_id || null
     });
     lastTriggerTime = Date.now();
     isScraping = true;
     
     // Show notification
     try {
+      const notifMsg = data.data.template_id
+        ? `Template scrape: ${data.data.template_id} (${data.data.max_posts} images)`
+        : `Starting scraping! Opening ${data.data.target_urls.length} tab(s)...`;
       chrome.notifications.create({
         type: 'basic',
         iconUrl: chrome.runtime.getURL('icon48.png'),
         title: 'GeeLark Scraper',
-        message: `Starting scraping! Opening ${data.data.target_urls.length} tab(s)...`
+        message: notifMsg
       }).catch((err) => {
         console.log('Notification failed (non-critical):', err);
       });
@@ -422,15 +426,21 @@ async function ensureContentScript(tabId, retries = 3) {
 
 // Start scraping directly (no job queue)
 async function startScrapingDirectly(triggerData) {
-  console.log('Starting scraping directly. Source type:', triggerData.source_type);
-  
-  const config = await getConfig();
-  let progress = 0;
-  const totalUrls = triggerData.target_urls?.length || 0;
-  const sourceType = triggerData.source_type || 'pinterest';
-  const maxPosts = triggerData.max_posts || 50; // Default to 50 if not provided
+  try {
+    console.log('Starting scraping directly. Source type:', triggerData.source_type);
+    
+    const config = await getConfig();
+    let progress = 0;
+    const totalUrls = triggerData.target_urls?.length || 0;
+    const sourceType = triggerData.source_type || 'pinterest';
+    const maxPosts = triggerData.max_posts || 50; // Default to 50 if not provided
+    const templateId = triggerData.template_id || null; // Template ID for template-based scraping
+    
+    if (templateId) {
+      console.log(`[DEBUG] Template-based scraping for template: ${templateId}`);
+    }
 
-  if (sourceType === 'pinterest') {
+    if (sourceType === 'pinterest') {
     // Pinterest: Get pin links first, then open each pin individually
     for (const url of triggerData.target_urls || []) {
       try {
@@ -695,6 +705,9 @@ async function startScrapingDirectly(triggerData) {
               // Upload each image
               for (const image of imageResults.images) {
                 image.sourceType = 'pinterest';
+                if (templateId) {
+                  image.templateId = templateId;
+                }
                 // Use search query from URL, or fallback to triggerData.search_terms
                 if (searchQuery) {
                   image.searchTerms = [searchQuery];
@@ -721,7 +734,8 @@ async function startScrapingDirectly(triggerData) {
                 console.log(`[DEBUG] Image metadata before upload:`, { 
                   fandom: image.fandom, 
                   character: image.character, 
-                  searchQuery: image.searchQuery 
+                  searchQuery: image.searchQuery,
+                  templateId: image.templateId || null
                 });
                 await uploadAsset(image, config);
                 progress++;
@@ -890,6 +904,9 @@ async function startScrapingDirectly(triggerData) {
           let uploadCount = 0;
           for (const image of imageResults.images) {
             image.sourceType = sourceType;
+            if (templateId) {
+              image.templateId = templateId;
+            }
             // Use search query from URL, or fallback to triggerData.search_terms
             if (searchQuery) {
               image.searchTerms = [searchQuery];
@@ -915,6 +932,7 @@ async function startScrapingDirectly(triggerData) {
               fandom: image.fandom, 
               character: image.character, 
               searchQuery: image.searchQuery,
+              templateId: image.templateId || null,
               description: image.description?.substring(0, 50) + '...'
             });
             await uploadAsset(image, config);
@@ -955,8 +973,8 @@ async function startScrapingDirectly(triggerData) {
     }
   }
 
-  // Show completion notification
-  try {
+    // Show completion notification
+    try {
     chrome.notifications.create({
       type: 'basic',
       iconUrl: chrome.runtime.getURL('icon48.png'),
@@ -965,11 +983,16 @@ async function startScrapingDirectly(triggerData) {
     }).catch((err) => {
       console.log('Notification failed (non-critical):', err);
     });
-  } catch (e) {
-    console.log('Notifications not available:', e);
+    } catch (e) {
+      console.log('Notifications not available:', e);
+    }
+  } catch (err) {
+    console.error('[ERROR] Scraping failed:', err);
+  } finally {
+    isScraping = false;
+    // Immediately poll for next task (e.g. next template in queue) instead of waiting for interval
+    pollForTriggers();
   }
-
-  isScraping = false;
 }
 
 // Supported image MIME types for scraping (formats the dashboard can display/process)
@@ -1050,16 +1073,20 @@ async function uploadAsset(imageData, config) {
       ? imageData.searchTerms[0] 
       : '';
     
-    formData.append('metadata', JSON.stringify({
+    const metadataObj = {
       source_url: imageData.sourceUrl,
-      original_image_url: imageData.url, // Store original image URL for duplicate detection
-      image_url: imageData.url, // Alias for compatibility
+      original_image_url: imageData.url,
+      image_url: imageData.url,
       description: imageData.description,
       source_type: imageData.sourceType || 'pinterest',
       search_terms: imageData.searchTerms || [],
       search_query: searchQuery,
       character: imageData.character || null
-    }));
+    };
+    if (imageData.templateId) {
+      metadataObj.template_id = imageData.templateId;
+    }
+    formData.append('metadata', JSON.stringify(metadataObj));
 
     // Build headers - API key is optional for local development
     const headers = {};

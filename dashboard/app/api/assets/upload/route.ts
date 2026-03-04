@@ -4,20 +4,8 @@ import sharp from 'sharp'
 import { createHash } from 'crypto'
 import { uploadToGcs, isGcsConfigured, getGcsBucketImages } from '@/lib/gcs'
 
-// Search query mapping (matches Python implementation)
-const SEARCH_QUERY_MAP: Record<string, { category: string; subcategories: string[] }> = {
-  'lads': {
-    category: 'lads',
-    subcategories: ['love and deepspace', 'lads xavier', 'lads zayne', 'lads rafayel', 'chainsaw man', 'csm']
-  },
-  'jjk': {
-    category: 'jjk',
-    subcategories: ['jujutsu kaisen', 'gojo satoru', 'sukuna jjk', 'megumi fushiguro']
-  },
-  'genshin': {
-    category: 'genshin',
-    subcategories: ['genshin impact', 'zhongli genshin', 'raiden shogun']
-  },
+// Static fallback mapping for non-fandom categories
+const STATIC_CATEGORY_MAP: Record<string, { category: string; subcategories: string[] }> = {
   'generic_anime': {
     category: 'generic_anime',
     subcategories: ['anime aesthetic', 'manga collection', 'anime room']
@@ -28,143 +16,105 @@ const SEARCH_QUERY_MAP: Record<string, { category: string; subcategories: string
   }
 }
 
-function findCategoryFromSearchTerm(searchTerm: string | null, description?: string | null): { category: string | null; subcategory: string | null; character: string | null } {
+interface FandomConfig {
+  short_id: string
+  full_name: string
+  aliases: string[]
+  characters: { name: string; aliases: string[] }[]
+}
+
+let fandomConfigCache: FandomConfig[] | null = null
+let fandomCacheTimestamp = 0
+const FANDOM_CACHE_TTL = 60_000
+
+async function getFandomConfigs(): Promise<FandomConfig[]> {
+  const now = Date.now()
+  if (fandomConfigCache && now - fandomCacheTimestamp < FANDOM_CACHE_TTL) {
+    return fandomConfigCache
+  }
+
+  try {
+    const supabase = createAdminClient()
+    const { data: fandoms } = await supabase
+      .from('fandoms')
+      .select('short_id, full_name, aliases')
+    const { data: characters } = await supabase
+      .from('characters')
+      .select('fandom_id, name, aliases, fandoms!inner(short_id)')
+
+    if (fandoms && characters) {
+      fandomConfigCache = fandoms.map((f: any) => ({
+        short_id: f.short_id,
+        full_name: f.full_name,
+        aliases: f.aliases || [],
+        characters: characters
+          .filter((c: any) => c.fandoms?.short_id === f.short_id)
+          .map((c: any) => ({ name: c.name, aliases: c.aliases || [] })),
+      }))
+      fandomCacheTimestamp = now
+      return fandomConfigCache!
+    }
+  } catch {
+    // Fall through to empty array (will use static fallback in findCategory)
+  }
+
+  return []
+}
+
+async function findCategoryFromSearchTerm(searchTerm: string | null, description?: string | null): Promise<{ category: string | null; subcategory: string | null; character: string | null }> {
   if (!searchTerm && !description) {
     return { category: null, subcategory: null, character: null }
   }
-  
+
   const lowerTerm = (searchTerm || description || '').toLowerCase()
-  
-  // Check for "love and deepspace" first
-  const isLoveAndDeepspace = (lowerTerm.includes('love') && lowerTerm.includes('deep') && lowerTerm.includes('space')) || 
-                             (lowerTerm.includes('love') && lowerTerm.includes('deepspace'))
-  
-    // Handle LADS with character
-    if (isLoveAndDeepspace || lowerTerm.includes('lads')) {
-      // Try to extract character (expanded list to match extension)
-      const ladsCharacters = [
-        'xavier', 'zayne', 'rafayel', 'caleb', 'sylus',
-        'aislinn', 'andrew', 'benedict', 'carter', 'dimitri', 'noah', 'gideon', 'greyson',
-        'jenna', 'jeremiah', 'josephine', 'kevi', 'leon', 'luke', 'kieran', 'lumiere',
-        'mephisto', 'nero', 'otto', 'philip', 'player', 'lucius', 'raymond', 'riley',
-        'simone', 'soren', 'talia', 'tara', 'thomas', 'ulysses', 'viper', 'yvonne'
-      ]
-      for (const char of ladsCharacters) {
-        if (lowerTerm.includes(char)) {
-          return {
-            category: 'lads',
-            subcategory: char,
-            character: char
-          }
-        }
-      }
-      
-      if (lowerTerm.includes('chainsaw') || lowerTerm.includes('csm')) {
-        return { category: 'lads', subcategory: 'chainsaw_man', character: null }
-      }
-      // Default to 'general' instead of 'lads' to avoid nested folder structure
-      return { category: 'lads', subcategory: 'general', character: null }
-    }
-  
-  // Handle JJK - extract character and use as subcategory
-  if (lowerTerm.includes('jjk') || lowerTerm.includes('jujutsu')) {
-    // JJK character list with aliases
-    const jjkCharacters = [
-      'gojo satoru', 'sukuna', 'megumi fushiguro', 'yuji itadori', 'nobara kugisaki',
-      'nanami', 'todo', 'yuta okkotsu', 'toji fushiguro', 'geto suguru', 'panda', 'toge inumaki',
-      'maki zenin', 'kasumi miwa', 'yuki tsukumo', 'kenjaku', 'mahito', 'jogo', 'hanami', 'dagon'
-    ]
-    
-    const jjkAliases: Record<string, string[]> = {
-      'gojo satoru': ['gojo', 'satoru gojo', 'satoru', 'gojo satoru'],
-      'sukuna': ['sukuna', 'ryomen sukuna'],
-      'megumi fushiguro': ['megumi', 'fushiguro', 'megumi fushiguro'],
-      'yuji itadori': ['yuji', 'itadori', 'yuji itadori'],
-      'nobara kugisaki': ['nobara', 'kugisaki', 'nobara kugisaki'],
-      'nanami': ['nanami', 'kento nanami'],
-      'todo': ['todo', 'aoi todo'],
-      'yuta okkotsu': ['yuta', 'okkotsu', 'yuta okkotsu'],
-      'toji fushiguro': ['toji', 'toji fushiguro'],
-      'geto suguru': ['geto', 'suguru geto', 'suguru'],
-      'panda': ['panda'],
-      'toge inumaki': ['toge', 'inumaki', 'toge inumaki'],
-      'maki zenin': ['maki', 'zenin', 'maki zenin'],
-      'kasumi miwa': ['miwa', 'kasumi miwa', 'kasumi'],
-      'yuki tsukumo': ['yuki', 'tsukumo', 'yuki tsukumo'],
-      'kenjaku': ['kenjaku'],
-      'mahito': ['mahito'],
-      'jogo': ['jogo'],
-      'hanami': ['hanami'],
-      'dagon': ['dagon']
-    }
-    
-    // Check aliases first (more specific) - sort by length descending to match most specific first
-    // Collect all (charName, alias) pairs and sort by alias length
+  const fandomConfigs = await getFandomConfigs()
+
+  // Try dynamic fandom configs first
+  for (const fandom of fandomConfigs) {
+    const fandomMatched = fandom.aliases.some((alias) => lowerTerm.includes(alias.toLowerCase()))
+    if (!fandomMatched) continue
+
+    // Fandom matched - try to find a character
+    // Collect all (charName, alias) pairs and sort by alias length (longest first)
     const allAliases: Array<[string, string]> = []
-    for (const [charName, aliases] of Object.entries(jjkAliases)) {
-      for (const alias of aliases) {
-        allAliases.push([charName, alias])
+    for (const char of fandom.characters) {
+      for (const alias of char.aliases) {
+        allAliases.push([char.name, alias])
       }
+      allAliases.push([char.name, char.name])
     }
-    // Sort by alias length (longest first) to match most specific aliases first
     allAliases.sort((a, b) => b[1].length - a[1].length)
-    
+
     for (const [charName, alias] of allAliases) {
-      if (lowerTerm.includes(alias)) {
-        // Use character name as subcategory (sanitized)
+      if (lowerTerm.includes(alias.toLowerCase())) {
         const sanitizedChar = charName.replace(/\s+/g, '_').toLowerCase()
         return {
-          category: 'jjk',
+          category: fandom.short_id,
           subcategory: sanitizedChar,
-          character: charName
+          character: charName,
         }
       }
     }
-    
-    // Check direct character names
-    for (const charName of jjkCharacters) {
-      if (lowerTerm.includes(charName.toLowerCase())) {
-        const sanitizedChar = charName.replace(/\s+/g, '_').toLowerCase()
-        return {
-          category: 'jjk',
-          subcategory: sanitizedChar,
-          character: charName
-        }
-      }
-    }
-    
-    // No character found, use default subcategory
-    return { category: 'jjk', subcategory: 'other', character: null }
+
+    // Fandom matched but no character found
+    return { category: fandom.short_id, subcategory: 'general', character: null }
   }
-  
-  // Handle Genshin
-  if (lowerTerm.includes('genshin')) {
-    return { category: 'genshin', subcategory: 'genshin_impact', character: null }
-  }
-  
-  // Try to match from SEARCH_QUERY_MAP
-  // Check subcategories FIRST (more specific) before checking category keys
-  // Sort subcategories by length (longest first) to match more specific terms first
-  for (const [key, config] of Object.entries(SEARCH_QUERY_MAP)) {
-    // Sort subcategories by length descending to match longer/more specific terms first
+
+  // Try static non-fandom categories (stores, generic_anime, etc.)
+  for (const [key, config] of Object.entries(STATIC_CATEGORY_MAP)) {
     const sortedSubcats = [...config.subcategories].sort((a, b) => b.length - a.length)
-    
-    // Check subcategories first (more specific matches)
+
     for (const subcat of sortedSubcats) {
       if (lowerTerm.includes(subcat.toLowerCase())) {
         return {
           category: config.category,
           subcategory: subcat.replace(/\s+/g, '_'),
-          character: null
+          character: null,
         }
       }
     }
-    
-    // Only check category key if no subcategory matched
-    // Make category key check more specific to avoid false matches
-    // For "stores", only match if the term is exactly "stores" or starts/ends with it as a word
+
     if (key === 'stores') {
-      // For stores, be more specific - only match if it's a standalone word or exact match
       const storesRegex = /\bstores\b/i
       if (storesRegex.test(lowerTerm) && !lowerTerm.includes('blind box') && !lowerTerm.includes('comic') && !lowerTerm.includes('anime') && !lowerTerm.includes('figure') && !lowerTerm.includes('manga')) {
         return { category: config.category, subcategory: key, character: null }
@@ -173,7 +123,7 @@ function findCategoryFromSearchTerm(searchTerm: string | null, description?: str
       return { category: config.category, subcategory: key, character: null }
     }
   }
-  
+
   return { category: 'uncategorized', subcategory: 'other', character: null }
 }
 
@@ -319,8 +269,8 @@ export async function POST(request: NextRequest) {
     let subcategory = metadata?.subcategory || null
     
     // Always try to categorize from search query/description (overrides metadata if better match found)
-    const categoryInfo = findCategoryFromSearchTerm(searchQuery, description)
-    
+    const categoryInfo = await findCategoryFromSearchTerm(searchQuery, description)
+
     // Use detected category if:
     // 1. No category in metadata, OR
     // 2. Category in metadata is 'uncategorized', OR  
@@ -343,66 +293,53 @@ export async function POST(request: NextRequest) {
       }
     }
     
-    // Special handling for JJK: always use character as subcategory if available
-    if (category === 'jjk' || fandom === 'jjk' || (searchQuery && (searchQuery.toLowerCase().includes('jjk') || searchQuery.toLowerCase().includes('jujutsu')))) {
-      category = 'jjk' // Ensure category is set to jjk
-      
-      // If we have a character, use it as subcategory
+    // For any DB-backed fandom: use character as subcategory when available
+    const fandomConfigs = await getFandomConfigs()
+    const matchedFandom = fandomConfigs.find((fc) =>
+      category === fc.short_id || fandom === fc.short_id ||
+      (searchQuery && fc.aliases.some((a) => searchQuery.toLowerCase().includes(a.toLowerCase())))
+    )
+    if (matchedFandom) {
+      category = matchedFandom.short_id
+
       if (character && character !== 'unknown' && character !== null) {
-        const sanitizedChar = character.replace(/\s+/g, '_').toLowerCase()
-        subcategory = sanitizedChar
+        subcategory = character.replace(/\s+/g, '_').toLowerCase()
       } else if (searchQuery) {
-        // Try to extract character from search query if not in metadata
-        const categoryInfo = findCategoryFromSearchTerm(searchQuery, metadata?.description)
+        const categoryInfo = await findCategoryFromSearchTerm(searchQuery, metadata?.description)
         if (categoryInfo.character) {
           character = categoryInfo.character
-          const sanitizedChar = character.replace(/\s+/g, '_').toLowerCase()
-          subcategory = sanitizedChar
+          subcategory = character.replace(/\s+/g, '_').toLowerCase()
         } else {
-          // No character found, use default
-          subcategory = 'other'
+          subcategory = subcategory || 'general'
         }
       } else {
-        // No character and no search query, use default
-        subcategory = subcategory || 'other'
+        subcategory = subcategory || 'general'
       }
     }
     
-    // If still unknown, try to extract from search_query
+    // If still unknown, try to extract from search_query using dynamic config
     if ((fandom === 'unknown' || character === 'unknown') && searchQuery) {
-      // Simple extraction logic (can be improved)
       const lowerQuery = searchQuery.toLowerCase()
-      
-      // Check for "love and deep space" or "lads"
-      if (lowerQuery.includes('love') && lowerQuery.includes('deep') && lowerQuery.includes('space')) {
-        fandom = fandom === 'unknown' ? 'lads' : fandom
-      } else if (lowerQuery.includes('lads')) {
-        fandom = fandom === 'unknown' ? 'lads' : fandom
-      }
-      
-      // Check for character names (including JJK characters)
-      if (character === 'unknown') {
-        const characterNames = [
-          // LADS Main characters
-          'xavier', 'zayne', 'rafayel', 'caleb', 'sylus',
-          // LADS Supporting characters
-          'aislinn', 'andrew', 'benedict', 'carter', 'dimitri', 'noah', 'gideon', 'greyson',
-          'jenna', 'jeremiah', 'josephine', 'kevi', 'leon', 'luke', 'kieran', 'lumiere',
-          'mephisto', 'nero', 'otto', 'philip', 'player', 'lucius', 'raymond', 'riley',
-          'simone', 'soren', 'talia', 'tara', 'thomas', 'ulysses', 'viper', 'yvonne',
-          // Chainsaw Man characters
-          'pochita', 'denji', 'power', 'aki', 'makima', 'reze', 'kobeni',
-          // JJK characters (check aliases too)
-          'gojo', 'satoru', 'sukuna', 'megumi', 'fushiguro', 'yuji', 'itadori', 'nobara', 'kugisaki',
-          'nanami', 'todo', 'yuta', 'okkotsu', 'toji', 'geto', 'suguru', 'panda', 'toge', 'inumaki',
-          'maki', 'zenin', 'miwa', 'kasumi', 'yuki', 'tsukumo', 'kenjaku', 'mahito', 'jogo', 'hanami', 'dagon'
-        ]
-        for (const charName of characterNames) {
-          if (lowerQuery.includes(charName)) {
-            character = charName
-            break
+      const fandomConfigs = await getFandomConfigs()
+
+      for (const fc of fandomConfigs) {
+        const fandomMatched = fc.aliases.some((alias) => lowerQuery.includes(alias.toLowerCase()))
+        if (fandomMatched && fandom === 'unknown') {
+          fandom = fc.short_id
+        }
+
+        if (character === 'unknown' && fandomMatched) {
+          for (const ch of fc.characters) {
+            const charMatched = ch.aliases.some((a) => lowerQuery.includes(a.toLowerCase())) ||
+              lowerQuery.includes(ch.name.toLowerCase())
+            if (charMatched) {
+              character = ch.name
+              if (fandom === 'unknown') fandom = fc.short_id
+              break
+            }
           }
         }
+        if (character !== 'unknown') break
       }
     }
     
@@ -541,6 +478,21 @@ export async function POST(request: NextRequest) {
 
     if (dbError) {
       return NextResponse.json({ error: dbError.message }, { status: 500 })
+    }
+
+    // Link asset to template if template_id is provided
+    const templateId = metadata?.template_id
+    if (templateId && assetData?.id) {
+      try {
+        await supabase
+          .from('asset_templates')
+          .upsert(
+            { asset_id: assetData.id, template_id: templateId },
+            { onConflict: 'asset_id,template_id' }
+          )
+      } catch (linkError) {
+        console.warn('Failed to link asset to template (non-fatal):', linkError)
+      }
     }
 
     return NextResponse.json({ data: assetData }, { status: 201 })

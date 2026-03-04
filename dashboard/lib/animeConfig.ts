@@ -2,15 +2,19 @@
 export interface AnimeConfig {
   id: string
   displayName: string
-  fullName: string // Full name for Pinterest search (e.g., "jujutsu kaisen", "love and deepspace")
+  fullName: string
   characters: string[]
+  characterAliases?: Record<string, string[]>
+  aliases?: string[]
 }
 
+// Static fallback used when the database is unavailable
 export const animeConfigs: AnimeConfig[] = [
   {
     id: 'jjk',
     displayName: 'Jujutsu Kaisen',
     fullName: 'jujutsu kaisen',
+    aliases: ['jjk', 'jujutsu', 'jujutsu kaisen'],
     characters: [
       'gojo satoru',
       'sukuna',
@@ -38,14 +42,13 @@ export const animeConfigs: AnimeConfig[] = [
     id: 'lads',
     displayName: 'Love and Deepspace',
     fullName: 'love and deepspace',
+    aliases: ['lads', 'love and deepspace', 'love and deep space'],
     characters: [
-      // Main characters
       'xavier',
       'zayne',
       'rafayel',
       'caleb',
       'sylus',
-      // Supporting characters
       'aislinn',
       'andrew',
       'benedict',
@@ -82,14 +85,46 @@ export const animeConfigs: AnimeConfig[] = [
   }
 ]
 
+let cachedDynamicConfigs: AnimeConfig[] | null = null
+let cacheTimestamp = 0
+const CACHE_TTL = 60_000 // 1 minute
+
+/**
+ * Fetch fandom/character config from the database via the API.
+ * Falls back to the static hardcoded config if the API is unavailable.
+ */
+export async function fetchAnimeConfigs(baseUrl?: string): Promise<AnimeConfig[]> {
+  const now = Date.now()
+  if (cachedDynamicConfigs && now - cacheTimestamp < CACHE_TTL) {
+    return cachedDynamicConfigs
+  }
+
+  try {
+    const url = baseUrl
+      ? `${baseUrl}/api/fandoms/config`
+      : '/api/fandoms/config'
+    const res = await fetch(url, { next: { revalidate: 60 } })
+    if (!res.ok) throw new Error('API returned ' + res.status)
+    const data = await res.json()
+
+    if (data.config && Array.isArray(data.config) && data.config.length > 0) {
+      cachedDynamicConfigs = data.config
+      cacheTimestamp = now
+      return data.config
+    }
+  } catch {
+    // Fall through to static config
+  }
+
+  return animeConfigs
+}
+
 /**
  * Generate Pinterest search URL for an anime character
- * Format matches: https://www.pinterest.com/search/pins/?q=jujutsu%20kaisen%20maki%20zenin&rs=ac&len=19&source_id=ac_hf56Dfin&eq=jujutsu%20kaisen%20maki&etslf=2941
  */
 export function generatePinterestUrl(anime: AnimeConfig, character: string): string {
   const searchQuery = `${anime.fullName} ${character}`
   const encoded = encodeURIComponent(searchQuery)
-  // Create a shorter query for the eq parameter (anime name + first word of character)
   const characterFirstWord = character.split(' ')[0]
   const eqQuery = `${anime.fullName} ${characterFirstWord}`
   const eqEncoded = encodeURIComponent(eqQuery)
@@ -99,7 +134,6 @@ export function generatePinterestUrl(anime: AnimeConfig, character: string): str
 
 /**
  * Generate Google Images search URL for an anime character
- * Format: https://www.google.com/search?q=jujutsu%20kaisen%20gojo%20satoru&tbm=isch
  */
 export function generateGoogleImagesUrl(anime: AnimeConfig, character: string): string {
   const searchQuery = `${anime.fullName} ${character}`

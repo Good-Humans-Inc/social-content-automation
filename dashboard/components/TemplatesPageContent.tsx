@@ -124,7 +124,7 @@ export default function TemplatesPageContent() {
         <Typography variant="h4" component="h1" fontWeight="bold">
           Templates
         </Typography>
-        <Box sx={{ display: 'flex', gap: 2 }}>
+        <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
           <TemplateCreateButton />
           <Link href="/api/templates/export" style={{ textDecoration: 'none' }}>
             <Button variant="contained" color="success">
