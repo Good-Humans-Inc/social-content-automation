@@ -3,7 +3,8 @@
 Standalone script to run the video generation job worker.
 
 This script polls the database for pending video generation jobs,
-processes them, and uploads the generated videos to Supabase Storage.
+processes them, and uploads the generated videos to GCS (if GCS_VIDEO_BUCKET
+or GCS_BUCKET_VIDEOS is set) or Supabase Storage otherwise.
 
 Usage:
     python -m src.run_worker
@@ -15,6 +16,8 @@ Environment Variables Required:
 Optional:
     POLL_INTERVAL - Polling interval in seconds (default: 5)
     OUTPUT_DIR - Output directory for generated videos (default: ./output)
+    GCS_VIDEO_BUCKET or GCS_BUCKET_VIDEOS - When set, generated videos (and slide images)
+        are uploaded to this GCS bucket instead of Supabase Storage.
     LOCAL_ASSETS_DIR - If set, the worker uses assets from this directory instead of
         downloading from Supabase Storage (e.g. after running python -m src.download_assets -o ./assets).
 """

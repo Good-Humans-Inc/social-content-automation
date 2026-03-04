@@ -136,10 +136,12 @@ def upload_video(
     object_prefix: str = "videos",
 ) -> Optional[str]:
     """
-    Upload a video or image to storage. If GCS_VIDEO_BUCKET is set, uploads to
-    that GCS bucket (e.g. babymilu-videos); otherwise uploads to Supabase Storage.
+    Upload a video or image to storage. If GCS_VIDEO_BUCKET or GCS_BUCKET_VIDEOS
+    is set, uploads to that GCS bucket; otherwise uploads to Supabase Storage.
     """
-    gcs_bucket = (os.environ.get("GCS_VIDEO_BUCKET") or "").strip()
+    gcs_bucket = (
+        os.environ.get("GCS_VIDEO_BUCKET") or os.environ.get("GCS_BUCKET_VIDEOS") or ""
+    ).strip()
     if gcs_bucket:
         return upload_video_to_gcs(
             gcs_bucket, video_path, account_id, template_id, object_prefix

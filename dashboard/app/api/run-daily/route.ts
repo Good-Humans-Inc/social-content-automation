@@ -203,10 +203,8 @@ export async function POST(request: NextRequest) {
     for (const item of plan) {
       for (const video of item.videos_to_post) {
         try {
-          // Call the existing upload-geelark endpoint internally
-          const baseUrl = process.env.NEXT_PUBLIC_APP_URL || process.env.VERCEL_URL
-            ? `https://${process.env.VERCEL_URL}`
-            : 'http://localhost:3000'
+          // Derive base URL from the incoming request so it works in any environment
+          const baseUrl = request.nextUrl.origin
 
           const uploadRes = await fetch(`${baseUrl}/api/videos/upload-geelark`, {
             method: 'POST',
