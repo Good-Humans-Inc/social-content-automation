@@ -2,7 +2,7 @@ import { GeeLarkClient, GeeLarkError } from '@/lib/geelark'
 import { NextRequest, NextResponse } from 'next/server'
 
 const DEFAULT_BOOT_WAIT_MS = 30_000
-const DEFAULT_APP_WAIT_MS = 5_000
+const DEFAULT_APP_WAIT_MS = 10_000
 const SCREENSHOT_POLL_MS = 2_000
 const SCREENSHOT_POLL_MAX_WAIT_MS = 30_000
 const RPA_POLL_MS = 3_000
@@ -15,11 +15,11 @@ const RPA_POLL_MAX_WAIT_MS = 120_000
  * Full workflow (when fullWorkflow !== false):
  * 1. Start the cloud phone
  * 2. Wait for boot (default 30s, or bootWaitSeconds)
- * 3a. If profileViewFlowId (or GEELARK_PROFILE_VIEW_FLOW_ID) is set: open TikTok via startApp, wait for app to load, run that RPA flow (e.g. "Click Profile" only), wait for it to finish, then take screenshot → profile screen.
- * 3b. Else: Open TikTok app, wait for app to load, then take screenshot → For You feed.
+ * 3a. If profileViewFlowId (or GEELARK_PROFILE_VIEW_FLOW_ID) is set: run that RPA flow (e.g. Open App TikTok + Click Profile), wait for it to finish, then take screenshot → profile screen.
+ * 3b. Else: Open TikTok app via startApp, wait for app to load, then take screenshot → For You feed.
  * 4. Take screenshot and return imageUrl.
  *
- * For profile screen: Create an RPA flow in GeeLark with just "Click" on the Profile tab (bottom right). This app opens TikTok first, then runs your flow, then takes the screenshot. Get the flow id from the task-flows API or dashboard, then select it in "Check login - profile flow" or set GEELARK_PROFILE_VIEW_FLOW_ID.
+ * For profile screen: Create an RPA flow in GeeLark with "Open App" (TikTok package) then "Click" on the Profile tab (bottom right). This app runs your flow then takes the screenshot. Get the flow id from the task-flows API or dashboard, then select it in "Check login - profile flow" or set GEELARK_PROFILE_VIEW_FLOW_ID.
  *
  * Returns { success, imageUrl?, taskId?, steps?: string[] }.
  */
@@ -62,14 +62,10 @@ export async function POST(request: NextRequest) {
 
       if (profileViewFlowId) {
         try {
-          steps.push('Opening TikTok app...')
-          await client.startApp(phoneId.trim())
-          steps.push('Waiting for app to load...')
-          await new Promise((r) => setTimeout(r, appWaitMs))
-          steps.push('Running profile-view RPA flow (click Profile)...')
+          steps.push('Running profile-view RPA flow (Open TikTok + Click Profile)...')
           const rpaTaskId = await client.addRpaTask(phoneId.trim(), profileViewFlowId, {
             name: 'check-login-profile-view',
-            remark: 'Click Profile tab for screenshot',
+            remark: 'Open TikTok and click Profile for screenshot',
           })
           steps.push(`RPA task created: ${rpaTaskId}`)
           const rpaPollUntil = Date.now() + RPA_POLL_MAX_WAIT_MS

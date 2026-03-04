@@ -828,18 +828,21 @@ export class GeeLarkClient {
   }
 
   /**
-   * Start an app on the cloud phone. POST /open/v1/app/start with { envId, packageName }.
-   * Either appVersionId or packageName must be provided.
+   * Start an app on the cloud phone. POST /open/v1/app/start with { id, packageName } (or envId; GeeLark may expect id for device).
    */
   async startApp(envId: string, packageName: string = GeeLarkClient.TIKTOK_PACKAGE): Promise<void> {
     if (!envId?.trim()) {
       throw new GeeLarkError('envId is required for app/start', undefined, 400)
     }
     const headers = await this.getHeaders()
+    const body: Record<string, string> = { packageName: packageName.trim() }
+    // Prefer id for device (matches phone/screenShot, task/rpa/add); some APIs expect envId
+    body.id = envId.trim()
+    body.envId = envId.trim()
     const response = await fetch(`${this.apiBase}/open/v1/app/start`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ envId: envId.trim(), packageName: packageName.trim() }),
+      body: JSON.stringify(body),
     })
     const data = await response.json().catch(() => ({}))
     if (!response.ok) {
