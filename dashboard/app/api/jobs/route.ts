@@ -8,6 +8,8 @@ export async function GET(request: NextRequest) {
     const status = searchParams.get('status')
     const accountId = searchParams.get('account_id')
     const templateId = searchParams.get('template_id')
+    const dateFrom = searchParams.get('date_from') // YYYY-MM-DD
+    const dateTo = searchParams.get('date_to') // YYYY-MM-DD
     const page = parseInt(searchParams.get('page') || '1')
     const limit = parseInt(searchParams.get('limit') || '50')
     const offset = (page - 1) * limit
@@ -32,6 +34,15 @@ export async function GET(request: NextRequest) {
 
     if (templateId) {
       query = query.eq('template_id', templateId)
+    }
+
+    if (dateFrom) {
+      const startOfDay = `${dateFrom}T00:00:00.000Z`
+      query = query.gte('created_at', startOfDay)
+    }
+    if (dateTo) {
+      const endOfDay = `${dateTo}T23:59:59.999Z`
+      query = query.lte('created_at', endOfDay)
     }
 
     const { data, error, count } = await query

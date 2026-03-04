@@ -33,6 +33,7 @@ export async function GET(request: NextRequest) {
     const totalPosts = logs.length
     const successCount = logs.filter((l: any) => l.status === 'success').length
     const failedCount = logs.filter((l: any) => l.status === 'failed').length
+    const pendingCount = logs.filter((l: any) => l.status === 'pending').length
 
     // Count available (completed + unposted) videos per account
     const availableByAccount: Record<string, number> = {}
@@ -47,22 +48,23 @@ export async function GET(request: NextRequest) {
       availableByAccount[account.id] = count ?? 0
     }
 
-    // Count videos posted today per account (from video_jobs.posted_at)
+    // Count video/slideshow posts today per account: success + pending (so "X/2 posted" includes scheduled)
     const postedTodayByAccount: Record<string, number> = {}
-    for (const account of accounts) {
-      const { count } = await supabase
-        .from('video_jobs')
-        .select('*', { count: 'exact', head: true })
-        .eq('account_id', account.id)
-        .gte('posted_at', startOfDay)
-        .lte('posted_at', endOfDay)
-      postedTodayByAccount[account.id] = count ?? 0
+    const successOrPendingLogsToday = logs.filter(
+      (l: any) =>
+        (l.type === 'video' || l.type === 'slideshow') &&
+        (l.status === 'success' || l.status === 'pending')
+    )
+    for (const log of successOrPendingLogsToday) {
+      const aid = log.account_id
+      if (aid) postedTodayByAccount[aid] = (postedTodayByAccount[aid] || 0) + 1
     }
 
     const byAccount: Record<string, {
       name: string
       success: number
       failed: number
+      pending: number
       total: number
       target: number
       byIntensity: Record<string, number>
@@ -75,6 +77,7 @@ export async function GET(request: NextRequest) {
         name: account.display_name,
         success: 0,
         failed: 0,
+        pending: 0,
         total: 0,
         target: account.daily_post_target ?? 2,
         byIntensity: { T0: 0, T1: 0, T2: 0 },
@@ -90,6 +93,7 @@ export async function GET(request: NextRequest) {
           name: log.accounts?.display_name || aid,
           success: 0,
           failed: 0,
+          pending: 0,
           total: 0,
           target: 2,
           byIntensity: { T0: 0, T1: 0, T2: 0 },
@@ -102,8 +106,10 @@ export async function GET(request: NextRequest) {
         byAccount[aid].success++
         const intensity = log.templates?.intensity || 'T0'
         byAccount[aid].byIntensity[intensity] = (byAccount[aid].byIntensity[intensity] || 0) + 1
-      } else {
+      } else if (log.status === 'failed') {
         byAccount[aid].failed++
+      } else if (log.status === 'pending') {
+        byAccount[aid].pending++
       }
     }
 
@@ -139,6 +145,7 @@ export async function GET(request: NextRequest) {
       totalPosts,
       successCount,
       failedCount,
+      pendingCount,
       intensityTotals,
       byAccount,
       topFailReasons,

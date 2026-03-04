@@ -80,10 +80,28 @@ export default function VideosPage() {
   const [jobs, setJobs] = useState<Job[]>([])
   const [loading, setLoading] = useState(true)
   const [tabValue, setTabValue] = useState(0)
+  const [jobPage, setJobPage] = useState(1)
+  const [jobStatusFilter, setJobStatusFilter] = useState<string>('')
+  const [jobDateFrom, setJobDateFrom] = useState<string>('')
+  const [jobDateTo, setJobDateTo] = useState<string>('')
+  const [jobsPagination, setJobsPagination] = useState<{ page: number; limit: number; total: number; totalPages: number }>({
+    page: 1,
+    limit: 10,
+    total: 0,
+    totalPages: 0,
+  })
+  const [jobsLoading, setJobsLoading] = useState(false)
 
   useEffect(() => {
-    fetchVideos()
-    fetchJobs()
+    let cancelled = false
+    setLoading(true)
+    Promise.all([
+      fetchVideos(),
+      fetchJobs(1, '', true),
+    ]).finally(() => {
+      if (!cancelled) setLoading(false)
+    })
+    return () => { cancelled = true }
   }, [])
 
   const fetchVideos = async () => {
@@ -104,19 +122,53 @@ export default function VideosPage() {
     }
   }
 
-  const fetchJobs = async () => {
+  const fetchJobs = async (
+    page: number = jobPage,
+    status?: string,
+    isInitialLoad?: boolean,
+    dateFrom?: string,
+    dateTo?: string,
+  ) => {
     try {
-      setLoading(true)
-      const response = await fetch('/api/jobs?limit=100')
+      if (!isInitialLoad) setJobsLoading(true)
+      const params = new URLSearchParams()
+      params.set('page', String(page))
+      params.set('limit', '10')
+      if (status) params.set('status', status)
+      if (dateFrom !== undefined && dateFrom !== '') params.set('date_from', dateFrom)
+      if (dateTo !== undefined && dateTo !== '') params.set('date_to', dateTo)
+      const response = await fetch(`/api/jobs?${params.toString()}`)
       if (response.ok) {
         const data = await response.json()
         setJobs(data.data || [])
+        if (data.pagination) {
+          setJobsPagination(data.pagination)
+          setJobPage(data.pagination.page)
+        }
       }
     } catch (error) {
       console.error('Error fetching jobs:', error)
     } finally {
-      setLoading(false)
+      if (!isInitialLoad) setJobsLoading(false)
     }
+  }
+
+  const handleJobPageChange = (_event: React.ChangeEvent<unknown>, value: number) => {
+    setJobPage(value)
+    fetchJobs(value, jobStatusFilter || undefined, false, jobDateFrom || undefined, jobDateTo || undefined)
+  }
+
+  const handleJobStatusFilterChange = (status: string) => {
+    setJobStatusFilter(status)
+    setJobPage(1)
+    fetchJobs(1, status || undefined, false, jobDateFrom || undefined, jobDateTo || undefined)
+  }
+
+  const handleJobDateFilterChange = (from: string, to: string) => {
+    setJobDateFrom(from)
+    setJobDateTo(to)
+    setJobPage(1)
+    fetchJobs(1, jobStatusFilter || undefined, false, from || undefined, to || undefined)
   }
 
   const handleTabChange = (_event: React.SyntheticEvent, newValue: number) => {
@@ -159,10 +211,21 @@ export default function VideosPage() {
       <TabPanel value={tabValue} index={0}>
         <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 2, mb: 3, flexWrap: 'wrap' }}>
           <CategoryMappingButton />
-          <AutoGenerateButton onSuccess={fetchJobs} />
+          <AutoGenerateButton onSuccess={() => fetchJobs(jobPage, jobStatusFilter || undefined, false, jobDateFrom || undefined, jobDateTo || undefined)} />
           <JobCreateButton />
         </Box>
-        <JobsList initialJobs={jobs} />
+        <JobsList
+          initialJobs={jobs}
+          pagination={jobsPagination}
+          statusFilter={jobStatusFilter}
+          dateFrom={jobDateFrom}
+          dateTo={jobDateTo}
+          onPageChange={handleJobPageChange}
+          onStatusFilterChange={handleJobStatusFilterChange}
+          onDateFilterChange={handleJobDateFilterChange}
+          onRefresh={() => fetchJobs(jobPage, jobStatusFilter || undefined, false, jobDateFrom || undefined, jobDateTo || undefined)}
+          loading={jobsLoading}
+        />
       </TabPanel>
 
       <TabPanel value={tabValue} index={1}>

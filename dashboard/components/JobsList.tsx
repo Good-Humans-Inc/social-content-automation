@@ -21,6 +21,10 @@ import {
   TableContainer,
   TableHead,
   TableRow,
+  Pagination,
+  ToggleButtonGroup,
+  ToggleButton,
+  TextField,
 } from '@mui/material'
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
 import CancelIcon from '@mui/icons-material/Cancel'
@@ -46,16 +50,54 @@ interface Job {
   accounts?: { id: string; display_name: string }
 }
 
-interface JobsListProps {
-  initialJobs: Job[]
+interface JobsListPagination {
+  page: number
+  limit: number
+  total: number
+  totalPages: number
 }
 
-export default function JobsList({ initialJobs }: JobsListProps) {
+interface JobsListProps {
+  initialJobs: Job[]
+  pagination?: JobsListPagination
+  statusFilter?: string
+  dateFrom?: string
+  dateTo?: string
+  onPageChange?: (event: React.ChangeEvent<unknown>, page: number) => void
+  onStatusFilterChange?: (status: string) => void
+  onDateFilterChange?: (dateFrom: string, dateTo: string) => void
+  onRefresh?: () => void
+  loading?: boolean
+}
+
+export default function JobsList({
+  initialJobs,
+  pagination,
+  statusFilter = '',
+  dateFrom = '',
+  dateTo = '',
+  onPageChange,
+  onStatusFilterChange,
+  onDateFilterChange,
+  onRefresh,
+  loading: externalLoading = false,
+}: JobsListProps) {
   const [jobs, setJobs] = useState(initialJobs)
   const [selectedJob, setSelectedJob] = useState<Job | null>(null)
   const [loading, setLoading] = useState(false)
 
+  // Sync jobs from parent when pagination is used
+  useEffect(() => {
+    if (pagination !== undefined) {
+      setJobs(initialJobs)
+    }
+  }, [initialJobs, pagination])
+
   const refreshJobs = async () => {
+    if (onRefresh) {
+      onRefresh()
+      return
+    }
     setLoading(true)
     try {
       const response = await fetch('/api/jobs?limit=100')
@@ -184,12 +226,74 @@ export default function JobsList({ initialJobs }: JobsListProps) {
     <>
       <Paper>
         <Box sx={{ p: 3 }}>
-          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2, flexWrap: 'wrap', gap: 2 }}>
             <Typography variant="h6">Job Queue</Typography>
-            <IconButton onClick={refreshJobs} disabled={loading} size="small">
-              <RefreshIcon />
-            </IconButton>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
+              {onStatusFilterChange && (
+                <ToggleButtonGroup
+                  value={statusFilter || 'all'}
+                  exclusive
+                  onChange={(_e, value) => value != null && onStatusFilterChange(value === 'all' ? '' : value)}
+                  size="small"
+                  aria-label="Filter by status"
+                  disabled={externalLoading}
+                >
+                  <ToggleButton value="all" aria-label="All">All</ToggleButton>
+                  <ToggleButton value="pending" aria-label="Pending">Pending</ToggleButton>
+                  <ToggleButton value="failed" aria-label="Failed">Failed</ToggleButton>
+                  <ToggleButton value="completed" aria-label="Successfully created">Successfully created</ToggleButton>
+                </ToggleButtonGroup>
+              )}
+              {onDateFilterChange && (
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+                  <TextField
+                    size="small"
+                    label="From date"
+                    type="date"
+                    value={dateFrom}
+                    onChange={(e) => onDateFilterChange(e.target.value, dateTo)}
+                    InputLabelProps={{ shrink: true }}
+                    disabled={externalLoading}
+                    sx={{ width: 150 }}
+                    inputProps={{ max: dateTo || undefined }}
+                  />
+                  <TextField
+                    size="small"
+                    label="To date"
+                    type="date"
+                    value={dateTo}
+                    onChange={(e) => onDateFilterChange(dateFrom, e.target.value)}
+                    InputLabelProps={{ shrink: true }}
+                    disabled={externalLoading}
+                    sx={{ width: 150 }}
+                    inputProps={{ min: dateFrom || undefined }}
+                  />
+                  {(dateFrom || dateTo) && (
+                    <Button
+                      size="small"
+                      onClick={() => onDateFilterChange('', '')}
+                      disabled={externalLoading}
+                    >
+                      Clear dates
+                    </Button>
+                  )}
+                </Box>
+              )}
+              <IconButton onClick={refreshJobs} disabled={loading || externalLoading} size="small">
+                <RefreshIcon />
+              </IconButton>
+            </Box>
           </Box>
+
+          {externalLoading && (
+            <LinearProgress sx={{ mb: 2 }} />
+          )}
+
+          {pagination && pagination.total > 0 && (
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+              Showing {(pagination.page - 1) * pagination.limit + 1}–{Math.min(pagination.page * pagination.limit, pagination.total)} of {pagination.total}
+            </Typography>
+          )}
 
           <Stack spacing={2}>
             {jobs.map((job) => (
@@ -285,6 +389,20 @@ export default function JobsList({ initialJobs }: JobsListProps) {
             <Typography color="text.secondary" textAlign="center" sx={{ py: 4 }}>
               No jobs found
             </Typography>
+          )}
+
+          {pagination && onPageChange && pagination.totalPages > 1 && (
+            <Box sx={{ display: 'flex', justifyContent: 'center', mt: 3 }}>
+              <Pagination
+                count={pagination.totalPages}
+                page={pagination.page}
+                onChange={onPageChange}
+                color="primary"
+                showFirstButton
+                showLastButton
+                disabled={externalLoading}
+              />
+            </Box>
           )}
         </Box>
       </Paper>

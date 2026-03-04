@@ -1,11 +1,77 @@
 import { createAdminClient } from '@/lib/supabase/admin'
 import { NextRequest, NextResponse } from 'next/server'
 
+const LONDON_TZ = 'Europe/London'
+
+/** Parse "YYYY-MM-DD" and "HH:mm" in London timezone and return the UTC Date. */
+function parseLondonDateTimeToUtc(dateStr: string, timeStr: string): Date {
+  const [year, month, day] = dateStr.split('-').map(Number)
+  const [hour, minute] = timeStr.split(':').map(Number)
+  const rough = new Date(Date.UTC(year, month - 1, day, hour, minute))
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: LONDON_TZ,
+    year: 'numeric',
+    month: 'numeric',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: 'numeric',
+    hour12: false,
+  }).formatToParts(rough)
+  const tzHour = parseInt(parts.find((p) => p.type === 'hour')?.value || '0')
+  const tzMinute = parseInt(parts.find((p) => p.type === 'minute')?.value || '0')
+  const tzDay = parseInt(parts.find((p) => p.type === 'day')?.value || '0')
+  const diffMinutes =
+    (tzDay - rough.getUTCDate()) * 1440 +
+    (tzHour - rough.getUTCHours()) * 60 +
+    (tzMinute - rough.getUTCMinutes())
+  return new Date(rough.getTime() - diffMinutes * 60000)
+}
+
+/** Get today's date in London as YYYY-MM-DD. */
+function getTodayInLondon(): string {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: LONDON_TZ,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date())
+  const y = parts.find((p) => p.type === 'year')?.value || ''
+  const m = parts.find((p) => p.type === 'month')?.value || ''
+  const d = parts.find((p) => p.type === 'day')?.value || ''
+  return `${y}-${m}-${d}`
+}
+
+/** Compute schedule_minutes from now until the next occurrence of HH:mm London (or today if in future). */
+function scheduleMinutesFromLondonTime(scheduleAtLondon: string, scheduleDate?: string): number {
+  const dateStr = scheduleDate || getTodayInLondon()
+  let targetUtc = parseLondonDateTimeToUtc(dateStr, scheduleAtLondon)
+  const now = Date.now()
+  if (targetUtc.getTime() <= now) {
+    const [y, mo, d] = dateStr.split('-').map(Number)
+    const nextDay = new Date(Date.UTC(y, mo - 1, d + 1))
+    const tomorrowStr = nextDay.toISOString().slice(0, 10)
+    targetUtc = parseLondonDateTimeToUtc(tomorrowStr, scheduleAtLondon)
+  }
+  return Math.max(0, Math.round((targetUtc.getTime() - now) / 60000))
+}
+
 export async function POST(request: NextRequest) {
   try {
     const supabase = createAdminClient()
     const body = await request.json().catch(() => ({}))
     const dryRun = body.dry_run === true
+    const overrides: Record<string, { will_post?: number; video_ids?: string[] }> | undefined = body.overrides
+    let scheduleMinutes: number
+    if (typeof body.schedule_at_london === 'string' && /^\d{1,2}:\d{2}$/.test(body.schedule_at_london.trim())) {
+      scheduleMinutes = scheduleMinutesFromLondonTime(
+        body.schedule_at_london.trim(),
+        typeof body.schedule_date === 'string' ? body.schedule_date : undefined
+      )
+    } else if (typeof body.schedule_minutes === 'number') {
+      scheduleMinutes = Math.max(0, body.schedule_minutes)
+    } else {
+      scheduleMinutes = scheduleMinutesFromLondonTime('20:00')
+    }
 
     // 1. Load all accounts
     const { data: accounts, error: accountsError } = await supabase
@@ -24,13 +90,14 @@ export async function POST(request: NextRequest) {
     const startOfDay = `${today}T00:00:00.000Z`
     const endOfDay = `${today}T23:59:59.999Z`
 
-    // Count all video/slideshow submissions today (pending, success, or failed) so we don't over-post
+    // Count success + pending video/slideshow posts today so "X/2 posted" and remaining slots include scheduled
     const { data: todayLogs } = await supabase
       .from('logs')
       .select('account_id, type')
       .gte('created_at', startOfDay)
       .lte('created_at', endOfDay)
       .in('type', ['video', 'slideshow'])
+      .in('status', ['success', 'pending'])
 
     const postedToday: Record<string, number> = {}
     for (const log of todayLogs || []) {
@@ -38,6 +105,10 @@ export async function POST(request: NextRequest) {
     }
 
     // 3. For each account, find completed + unposted videos
+    type VideoDetail = {
+      id: string; template_id: string; video_url: string; created_at: string;
+      templates?: { caption: string; fandom: string; intensity: string } | null
+    }
     const plan: Array<{
       account_id: string
       display_name: string
@@ -45,7 +116,8 @@ export async function POST(request: NextRequest) {
       already_posted: number
       remaining: number
       available_videos: number
-      videos_to_post: Array<{ id: string; template_id: string; video_url: string }>
+      all_available: VideoDetail[]
+      videos_to_post: VideoDetail[]
     }> = []
 
     for (const account of accounts) {
@@ -53,27 +125,33 @@ export async function POST(request: NextRequest) {
       const posted = postedToday[account.id] || 0
       const remaining = Math.max(0, target - posted)
 
-      // Fetch completed videos for this account that haven't been posted yet
+      // Fetch all completed + unposted videos for this account (for selection UI)
       const { data: readyVideos } = await supabase
         .from('video_jobs')
-        .select('id, template_id, video_url')
+        .select('id, template_id, video_url, created_at, templates(caption, fandom, intensity)')
         .eq('account_id', account.id)
         .eq('status', 'completed')
         .not('video_url', 'is', null)
         .is('posted_at', null)
         .order('created_at', { ascending: true })
-        .limit(remaining > 0 ? remaining : 0)
 
-      const videosToPost = (readyVideos || []).slice(0, remaining)
+      const allAvailable = (readyVideos || []) as Array<{
+        id: string; template_id: string; video_url: string; created_at: string;
+        templates?: { caption: string; fandom: string; intensity: string } | null
+      }>
 
-      // Count total available (not just what we'll post)
-      const { count: totalAvailable } = await supabase
-        .from('video_jobs')
-        .select('*', { count: 'exact', head: true })
-        .eq('account_id', account.id)
-        .eq('status', 'completed')
-        .not('video_url', 'is', null)
-        .is('posted_at', null)
+      // Default selection: first N where N = remaining (or overridden)
+      const accountOverride = overrides?.[account.id]
+      const willPostCount = accountOverride?.will_post ?? remaining
+      let videosToPost: typeof allAvailable
+
+      const maxPostPerAccount = 2
+      if (accountOverride?.video_ids?.length) {
+        const idSet = new Set(accountOverride.video_ids)
+        videosToPost = allAvailable.filter((v) => idSet.has(v.id)).slice(0, maxPostPerAccount)
+      } else {
+        videosToPost = allAvailable.slice(0, Math.min(maxPostPerAccount, Math.max(0, willPostCount)))
+      }
 
       plan.push({
         account_id: account.id,
@@ -81,8 +159,9 @@ export async function POST(request: NextRequest) {
         daily_target: target,
         already_posted: posted,
         remaining,
-        available_videos: totalAvailable ?? 0,
-        videos_to_post: videosToPost as Array<{ id: string; template_id: string; video_url: string }>,
+        available_videos: allAvailable.length,
+        all_available: allAvailable,
+        videos_to_post: videosToPost,
       })
     }
 
@@ -101,6 +180,15 @@ export async function POST(request: NextRequest) {
           available_videos: p.available_videos,
           will_post: p.videos_to_post.length,
           video_ids: p.videos_to_post.map((v) => v.id),
+          all_videos: p.all_available.map((v) => ({
+            id: v.id,
+            template_id: v.template_id,
+            video_url: v.video_url,
+            caption: v.templates?.caption || '',
+            fandom: v.templates?.fandom || '',
+            intensity: v.templates?.intensity || '',
+            created_at: v.created_at,
+          })),
         })),
         total_to_post: totalToPost,
       })
@@ -130,6 +218,7 @@ export async function POST(request: NextRequest) {
               video_url: video.video_url,
               account_id: item.account_id,
               template_id: video.template_id,
+              schedule_minutes: scheduleMinutes,
             }),
           })
 
