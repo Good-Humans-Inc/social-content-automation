@@ -2,7 +2,7 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { NextRequest, NextResponse } from 'next/server'
 import sharp from 'sharp'
 import { createHash } from 'crypto'
-import { uploadToGcs, isGcsConfigured, getGcsBucketImages } from '@/lib/gcs'
+import { uploadToGcs, isGcsConfigured, getGcsBucketImages, debugGcsConfig } from '@/lib/gcs'
 
 // Static fallback mapping for non-fandom categories
 const STATIC_CATEGORY_MAP: Record<string, { category: string; subcategories: string[] }> = {
@@ -485,34 +485,39 @@ export async function POST(request: NextRequest) {
 
     let publicUrl: string
 
-    if (isGcsConfigured() && getGcsBucketImages()) {
-      // Upload to GCS (babymilu-images)
-      const arrayBuffer = await file.arrayBuffer()
-      const buffer = Buffer.from(arrayBuffer)
-      const contentType = file.type || `image/${fileExt}`
-      try {
-        publicUrl = await uploadToGcs(getGcsBucketImages(), filePath, buffer, contentType)
-      } catch (gcsErr) {
-        console.error('GCS upload failed, falling back to Supabase:', gcsErr)
-        const { error: uploadError } = await supabase.storage
-          .from('assets')
-          .upload(filePath, buffer, { cacheControl: '3600', upsert: false, contentType })
-        if (uploadError) return NextResponse.json({ error: uploadError.message }, { status: 500 })
-        const { data: urlData } = supabase.storage.from('assets').getPublicUrl(filePath)
-        publicUrl = urlData.publicUrl
-      }
-    } else {
-      const { data: uploadData, error: uploadError } = await supabase.storage
-        .from('assets')
-        .upload(filePath, file, {
-          cacheControl: '3600',
-          upsert: false,
-        })
-      if (uploadError) {
-        return NextResponse.json({ error: uploadError.message }, { status: 500 })
-      }
-      const { data: urlData } = supabase.storage.from('assets').getPublicUrl(filePath)
-      publicUrl = urlData.publicUrl
+    const gcsDebug = debugGcsConfig()
+    console.log(`[UPLOAD] GCS debug:`, JSON.stringify(gcsDebug))
+    console.log(`[UPLOAD] Upload target — path: ${filePath}, category: ${category}, subcategory: ${subcategory}, character: ${character}, fandom: ${fandom}`)
+
+    if (!gcsDebug.isConfigured) {
+      console.error('[UPLOAD] GCS is NOT configured. Set GOOGLE_APPLICATION_CREDENTIALS or GOOGLE_APPLICATION_CREDENTIALS_JSON in your .env')
+      return NextResponse.json({
+        error: 'GCS is not configured. Set GOOGLE_APPLICATION_CREDENTIALS or GOOGLE_APPLICATION_CREDENTIALS_JSON.',
+        gcs_debug: gcsDebug,
+      }, { status: 500 })
+    }
+
+    if (!gcsDebug.keyFileExists && !process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON) {
+      console.error(`[UPLOAD] GCS key file does NOT exist at: ${process.env.GOOGLE_APPLICATION_CREDENTIALS}`)
+      return NextResponse.json({
+        error: `GCS key file not found at: ${process.env.GOOGLE_APPLICATION_CREDENTIALS}`,
+        gcs_debug: gcsDebug,
+      }, { status: 500 })
+    }
+
+    const contentType = file.type || `image/${fileExt}`
+    try {
+      publicUrl = await uploadToGcs(getGcsBucketImages(), filePath, buffer, contentType)
+    } catch (gcsErr: any) {
+      const errMsg = gcsErr?.message || String(gcsErr)
+      const errStack = gcsErr?.stack || ''
+      console.error('[UPLOAD] GCS upload FAILED (no fallback):', errMsg)
+      console.error('[UPLOAD] GCS error stack:', errStack)
+      return NextResponse.json({
+        error: `GCS upload failed: ${errMsg}`,
+        gcs_debug: gcsDebug,
+        path: filePath,
+      }, { status: 500 })
     }
 
     // Update metadata with processed image information

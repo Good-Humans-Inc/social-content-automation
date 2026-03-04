@@ -6,6 +6,8 @@
  * (Project Settings → Environment Variables; paste the entire key file content as the value).
  */
 
+import { existsSync } from 'fs'
+
 const BUCKET_IMAGES = process.env.GCS_BUCKET_IMAGES || 'babymilu-images'
 const BUCKET_MUSIC = process.env.GCS_BUCKET_MUSIC || 'babymilu-musics'
 const BUCKET_VIDEOS = process.env.GCS_BUCKET_VIDEOS || 'babymilu-videos'
@@ -30,14 +32,35 @@ export function isGcsConfigured(): boolean {
   )
 }
 
-function getStorageOptions(): { credentials?: object } {
+/** Debug: log full GCS config state. */
+export function debugGcsConfig(): Record<string, string | boolean> {
+  const keyFile = process.env.GOOGLE_APPLICATION_CREDENTIALS || ''
+  const hasJson = !!(process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON?.trim())
+  const keyFileExists = keyFile ? existsSync(keyFile) : false
+  return {
+    isConfigured: isGcsConfigured(),
+    bucket: BUCKET_IMAGES,
+    GOOGLE_APPLICATION_CREDENTIALS: keyFile || '(unset)',
+    keyFileExists,
+    GOOGLE_APPLICATION_CREDENTIALS_JSON: hasJson ? '(set, length=' + process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON!.length + ')' : '(unset)',
+  }
+}
+
+function getStorageOptions(): { credentials?: object; keyFilename?: string } {
   const json = process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON
   if (json && json.trim()) {
     try {
       return { credentials: JSON.parse(json) as object }
-    } catch {
-      return {}
+    } catch (e) {
+      console.error('[GCS] Failed to parse GOOGLE_APPLICATION_CREDENTIALS_JSON:', e)
     }
+  }
+  const keyFile = process.env.GOOGLE_APPLICATION_CREDENTIALS
+  if (keyFile && keyFile.trim()) {
+    if (!existsSync(keyFile.trim())) {
+      console.error(`[GCS] Key file does NOT exist: ${keyFile}`)
+    }
+    return { keyFilename: keyFile.trim() }
   }
   return {}
 }
@@ -52,15 +75,21 @@ export async function uploadToGcs(
   buffer: Buffer,
   contentType: string
 ): Promise<string> {
+  const opts = getStorageOptions()
+  const authMethod = opts.keyFilename ? `keyFile(${opts.keyFilename})` : opts.credentials ? 'inline-json' : 'none'
+  console.log(`[GCS] uploadToGcs called — bucket=${bucketName}, path=${objectPath}, size=${buffer.length}b, contentType=${contentType}, auth=${authMethod}`)
   const { Storage } = await import(/* webpackIgnore: true */ '@google-cloud/storage')
-  const storage = new Storage(getStorageOptions())
+  const storage = new Storage(opts)
   const bucket = storage.bucket(bucketName)
   const file = bucket.file(objectPath)
+  console.log(`[GCS] Saving to GCS...`)
   await file.save(buffer, {
     contentType,
     metadata: { cacheControl: 'public, max-age=3600' },
   })
-  return `https://storage.googleapis.com/${bucketName}/${objectPath}`
+  const url = `https://storage.googleapis.com/${bucketName}/${objectPath}`
+  console.log(`[GCS] Upload SUCCESS: ${url}`)
+  return url
 }
 
 /**
