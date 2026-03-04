@@ -61,6 +61,69 @@ async function getFandomConfigs(): Promise<FandomConfig[]> {
   return []
 }
 
+const FILLER_WORDS = new Set([
+  'aesthetic', 'wallpaper', 'anime', 'manga', 'fanart', 'fan', 'art',
+  'soft', 'dark', 'cute', 'icon', 'icons', 'pfp', 'profile', 'header',
+  'background', 'edit', 'edits', 'game', 'otome', 'cozy', 'vibes',
+])
+
+/** Strip fandom aliases and filler words from a search term to extract a character name. */
+function extractCharacterFromTerm(
+  lowerTerm: string,
+  fandom: FandomConfig
+): string | null {
+  let remaining = lowerTerm
+  // Remove all fandom aliases (longest first to avoid partial removal)
+  const sortedAliases = [...fandom.aliases].sort((a, b) => b.length - a.length)
+  for (const alias of sortedAliases) {
+    remaining = remaining.replace(new RegExp(alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), ' ')
+  }
+  // Remove filler words
+  const words = remaining
+    .split(/\s+/)
+    .map((w) => w.replace(/[^a-z0-9]/g, ''))
+    .filter((w) => w.length > 1 && !FILLER_WORDS.has(w))
+  if (words.length === 0 || words.length > 4) return null
+  const name = words.join(' ').trim()
+  if (name.length < 2) return null
+  return name
+}
+
+/** Auto-create a character in the characters table if it doesn't already exist. */
+async function autoCreateCharacter(fandomShortId: string, characterName: string): Promise<void> {
+  try {
+    const supabase = createAdminClient()
+    const { data: fandom } = await supabase
+      .from('fandoms')
+      .select('id')
+      .eq('short_id', fandomShortId)
+      .single()
+    if (!fandom) return
+
+    const normalized = characterName.toLowerCase().trim()
+    const aliases = [normalized]
+    const nameParts = normalized.split(/\s+/)
+    if (nameParts.length > 1) {
+      for (const part of nameParts) {
+        if (part.length > 2) aliases.push(part)
+      }
+      aliases.push(nameParts.reverse().join(' '))
+    }
+
+    await supabase
+      .from('characters')
+      .insert({
+        fandom_id: fandom.id,
+        name: normalized,
+        aliases: [...new Set(aliases)],
+      })
+      .select()
+      .single()
+  } catch {
+    // Ignore duplicates or any other errors — non-critical
+  }
+}
+
 async function findCategoryFromSearchTerm(searchTerm: string | null, description?: string | null): Promise<{ category: string | null; subcategory: string | null; character: string | null }> {
   if (!searchTerm && !description) {
     return { category: null, subcategory: null, character: null }
@@ -74,8 +137,7 @@ async function findCategoryFromSearchTerm(searchTerm: string | null, description
     const fandomMatched = fandom.aliases.some((alias) => lowerTerm.includes(alias.toLowerCase()))
     if (!fandomMatched) continue
 
-    // Fandom matched - try to find a character
-    // Collect all (charName, alias) pairs and sort by alias length (longest first)
+    // Fandom matched - try to find a character in the DB
     const allAliases: Array<[string, string]> = []
     for (const char of fandom.characters) {
       for (const alias of char.aliases) {
@@ -96,7 +158,19 @@ async function findCategoryFromSearchTerm(searchTerm: string | null, description
       }
     }
 
-    // Fandom matched but no character found
+    // Fandom matched but no known character — extract character name from search term
+    // by stripping fandom aliases and common filler words
+    const extracted = extractCharacterFromTerm(lowerTerm, fandom)
+    if (extracted) {
+      await autoCreateCharacter(fandom.short_id, extracted)
+      fandomConfigCache = null // bust cache so next upload picks it up
+      return {
+        category: fandom.short_id,
+        subcategory: extracted.replace(/\s+/g, '_').toLowerCase(),
+        character: extracted,
+      }
+    }
+
     return { category: fandom.short_id, subcategory: 'general', character: null }
   }
 
