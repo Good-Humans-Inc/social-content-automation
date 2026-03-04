@@ -20,10 +20,18 @@ import {
   DialogActions,
   Stack,
   Divider,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
 } from '@mui/material'
 import PlayArrowIcon from '@mui/icons-material/PlayArrow'
 import RefreshIcon from '@mui/icons-material/Refresh'
 import CalendarTodayIcon from '@mui/icons-material/CalendarToday'
+import VideoLibraryIcon from '@mui/icons-material/VideoLibrary'
+import CheckCircleIcon from '@mui/icons-material/CheckCircle'
 
 interface AccountSummary {
   name: string
@@ -32,6 +40,8 @@ interface AccountSummary {
   total: number
   target: number
   byIntensity: Record<string, number>
+  available_videos: number
+  posted_today: number
 }
 
 interface DailySummary {
@@ -43,24 +53,34 @@ interface DailySummary {
   byAccount: Record<string, AccountSummary>
   topFailReasons: { reason: string; count: number }[]
   recentLogs: any[]
+  totalAvailable: number
+  totalPostedToday: number
 }
 
-interface RunDailyPlan {
+interface RunDailyPlanItem {
   account_id: string
   display_name: string
   daily_target: number
   already_posted: number
   remaining: number
-  next_intensity: string | null
+  available_videos: number
+  will_post: number
+  video_ids?: string[]
 }
 
 interface RunDailyResult {
   dry_run: boolean
   date: string
-  plan: RunDailyPlan[]
-  total_remaining?: number
-  jobs_created?: number
-  job_ids?: string[]
+  plan: RunDailyPlanItem[]
+  total_to_post?: number
+  total_posted?: number
+  total_failed?: number
+  results?: Array<{
+    video_job_id: string
+    account_id: string
+    status: 'success' | 'failed'
+    error?: string
+  }>
 }
 
 export default function DailyPage() {
@@ -145,7 +165,7 @@ export default function DailyPage() {
             Daily Summary
           </Typography>
           <Typography variant="body2" color="text.secondary">
-            View posting activity and trigger daily orchestration
+            View posting activity and upload generated videos to accounts
           </Typography>
         </Box>
         <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
@@ -199,30 +219,45 @@ export default function DailyPage() {
             <Card sx={{ flex: 1 }}>
               <CardContent sx={{ p: 3 }}>
                 <Typography variant="body2" color="text.secondary" sx={{ mb: 1, textTransform: 'uppercase', letterSpacing: 0.5, fontSize: '0.75rem', fontWeight: 600 }}>
-                  Total Posts
+                  Videos Available
+                </Typography>
+                <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1 }}>
+                  <Typography variant="h3" fontWeight="bold" color="info.main">
+                    {summary.totalAvailable}
+                  </Typography>
+                  <VideoLibraryIcon sx={{ color: 'info.main', fontSize: 28 }} />
+                </Box>
+                <Typography variant="caption" color="text.secondary">
+                  Ready to post (unposted)
+                </Typography>
+              </CardContent>
+            </Card>
+            <Card sx={{ flex: 1 }}>
+              <CardContent sx={{ p: 3 }}>
+                <Typography variant="body2" color="text.secondary" sx={{ mb: 1, textTransform: 'uppercase', letterSpacing: 0.5, fontSize: '0.75rem', fontWeight: 600 }}>
+                  Posted Today
+                </Typography>
+                <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1 }}>
+                  <Typography variant="h3" fontWeight="bold" color="success.main">
+                    {summary.totalPostedToday}
+                  </Typography>
+                  <CheckCircleIcon sx={{ color: 'success.main', fontSize: 28 }} />
+                </Box>
+                <Typography variant="caption" color="text.secondary">
+                  Uploaded via GeeLark
+                </Typography>
+              </CardContent>
+            </Card>
+            <Card sx={{ flex: 1 }}>
+              <CardContent sx={{ p: 3 }}>
+                <Typography variant="body2" color="text.secondary" sx={{ mb: 1, textTransform: 'uppercase', letterSpacing: 0.5, fontSize: '0.75rem', fontWeight: 600 }}>
+                  Total Logs
                 </Typography>
                 <Typography variant="h3" fontWeight="bold" color="primary.main">
                   {summary.totalPosts}
                 </Typography>
-              </CardContent>
-            </Card>
-            <Card sx={{ flex: 1 }}>
-              <CardContent sx={{ p: 3 }}>
-                <Typography variant="body2" color="text.secondary" sx={{ mb: 1, textTransform: 'uppercase', letterSpacing: 0.5, fontSize: '0.75rem', fontWeight: 600 }}>
-                  Successful
-                </Typography>
-                <Typography variant="h3" fontWeight="bold" color="success.main">
-                  {summary.successCount}
-                </Typography>
-              </CardContent>
-            </Card>
-            <Card sx={{ flex: 1 }}>
-              <CardContent sx={{ p: 3 }}>
-                <Typography variant="body2" color="text.secondary" sx={{ mb: 1, textTransform: 'uppercase', letterSpacing: 0.5, fontSize: '0.75rem', fontWeight: 600 }}>
-                  Failed
-                </Typography>
-                <Typography variant="h3" fontWeight="bold" color="error.main">
-                  {summary.failedCount}
+                <Typography variant="caption" color="text.secondary">
+                  {summary.successCount} success, {summary.failedCount} failed
                 </Typography>
               </CardContent>
             </Card>
@@ -261,12 +296,23 @@ export default function DailyPage() {
               ) : (
                 <Stack spacing={2}>
                   {accountEntries.map(([id, acct]) => {
-                    const progress = acct.target > 0 ? Math.min(100, (acct.success / acct.target) * 100) : 0
+                    const progress = acct.target > 0 ? Math.min(100, (acct.posted_today / acct.target) * 100) : 0
                     return (
                       <Paper key={id} variant="outlined" sx={{ p: 2 }}>
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1, flexWrap: 'wrap' }}>
                           <Typography variant="body1" fontWeight="medium">{acct.name}</Typography>
-                          <Chip label={`${acct.success}/${acct.target}`} size="small" color={acct.success >= acct.target ? 'success' : 'warning'} />
+                          <Chip
+                            label={`${acct.posted_today}/${acct.target} posted`}
+                            size="small"
+                            color={acct.posted_today >= acct.target ? 'success' : 'warning'}
+                          />
+                          <Chip
+                            icon={<VideoLibraryIcon sx={{ fontSize: 16 }} />}
+                            label={`${acct.available_videos} available`}
+                            size="small"
+                            color="info"
+                            variant="outlined"
+                          />
                           {acct.failed > 0 && (
                             <Chip label={`${acct.failed} failed`} size="small" color="error" variant="outlined" />
                           )}
@@ -317,54 +363,116 @@ export default function DailyPage() {
 
       {/* Run Daily Dialog */}
       <Dialog open={runDialogOpen} onClose={() => setRunDialogOpen(false)} maxWidth="md" fullWidth>
-        <DialogTitle>Run Daily Orchestration</DialogTitle>
+        <DialogTitle>Run Daily — Post Generated Videos</DialogTitle>
         <DialogContent>
-          {runPlan && (
+          {runPlan && !runResult && (
             <Box sx={{ mt: 1 }}>
               <Alert severity="info" sx={{ mb: 2 }}>
-                Preview: {runPlan.total_remaining} job(s) will be created across {runPlan.plan.filter(p => p.remaining > 0).length} account(s).
+                {runPlan.total_to_post === 0
+                  ? 'All accounts have met their daily quota or have no available videos.'
+                  : `${runPlan.total_to_post} video(s) will be posted across ${runPlan.plan.filter((p) => p.will_post > 0).length} account(s).`}
               </Alert>
-              <Stack spacing={1.5}>
-                {runPlan.plan.map((item) => (
-                  <Paper key={item.account_id} variant="outlined" sx={{ p: 2 }}>
-                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <Box>
-                        <Typography variant="body1" fontWeight="medium">{item.display_name}</Typography>
-                        <Typography variant="caption" color="text.secondary">
-                          {item.already_posted}/{item.daily_target} posted today
-                        </Typography>
-                      </Box>
-                      <Box sx={{ display: 'flex', gap: 0.5, alignItems: 'center' }}>
-                        {item.remaining > 0 ? (
-                          <>
-                            <Chip label={`+${item.remaining} to create`} size="small" color="primary" />
-                            {item.next_intensity && (
-                              <Chip label={`Next: ${item.next_intensity}`} size="small" variant="outlined" />
-                            )}
-                          </>
-                        ) : (
-                          <Chip label="Quota met" size="small" color="success" />
-                        )}
-                      </Box>
-                    </Box>
-                  </Paper>
-                ))}
-              </Stack>
-              {runResult && (
-                <Alert severity="success" sx={{ mt: 2 }}>
-                  Created {runResult.jobs_created} job(s). They will be picked up by the worker.
-                </Alert>
-              )}
-              {runError && (
-                <Alert severity="error" sx={{ mt: 2 }}>
-                  {runError}
-                </Alert>
+              <TableContainer>
+                <Table size="small">
+                  <TableHead>
+                    <TableRow>
+                      <TableCell><strong>Account</strong></TableCell>
+                      <TableCell align="center"><strong>Target</strong></TableCell>
+                      <TableCell align="center"><strong>Posted Today</strong></TableCell>
+                      <TableCell align="center"><strong>Remaining</strong></TableCell>
+                      <TableCell align="center"><strong>Available</strong></TableCell>
+                      <TableCell align="center"><strong>Will Post</strong></TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {runPlan.plan.map((item) => (
+                      <TableRow key={item.account_id}>
+                        <TableCell>{item.display_name}</TableCell>
+                        <TableCell align="center">{item.daily_target}</TableCell>
+                        <TableCell align="center">{item.already_posted}</TableCell>
+                        <TableCell align="center">{item.remaining}</TableCell>
+                        <TableCell align="center">
+                          <Chip
+                            label={item.available_videos}
+                            size="small"
+                            color={item.available_videos > 0 ? 'info' : 'default'}
+                            variant="outlined"
+                          />
+                        </TableCell>
+                        <TableCell align="center">
+                          {item.will_post > 0 ? (
+                            <Chip label={`+${item.will_post}`} size="small" color="primary" />
+                          ) : (
+                            <Chip
+                              label={item.remaining === 0 ? 'Quota met' : 'No videos'}
+                              size="small"
+                              color={item.remaining === 0 ? 'success' : 'default'}
+                              variant="outlined"
+                            />
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            </Box>
+          )}
+          {runResult && (
+            <Box sx={{ mt: 1 }}>
+              <Alert severity={runResult.total_failed === 0 ? 'success' : 'warning'} sx={{ mb: 2 }}>
+                Posted {runResult.total_posted} video(s) successfully.
+                {(runResult.total_failed ?? 0) > 0 && ` ${runResult.total_failed} failed.`}
+              </Alert>
+              {runResult.results && runResult.results.length > 0 && (
+                <TableContainer component={Paper} variant="outlined">
+                  <Table size="small">
+                    <TableHead>
+                      <TableRow>
+                        <TableCell><strong>Account</strong></TableCell>
+                        <TableCell><strong>Video Job</strong></TableCell>
+                        <TableCell><strong>Status</strong></TableCell>
+                        <TableCell><strong>Error</strong></TableCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {runResult.results.map((r, i) => {
+                        const accountName = runResult.plan.find((p) => p.account_id === r.account_id)?.display_name || r.account_id
+                        return (
+                          <TableRow key={i}>
+                            <TableCell>{accountName}</TableCell>
+                            <TableCell sx={{ fontFamily: 'monospace', fontSize: '0.75rem' }}>
+                              {r.video_job_id.slice(0, 8)}...
+                            </TableCell>
+                            <TableCell>
+                              <Chip
+                                label={r.status}
+                                size="small"
+                                color={r.status === 'success' ? 'success' : 'error'}
+                              />
+                            </TableCell>
+                            <TableCell>
+                              <Typography variant="caption" color="error.main">
+                                {r.error || '—'}
+                              </Typography>
+                            </TableCell>
+                          </TableRow>
+                        )
+                      })}
+                    </TableBody>
+                  </Table>
+                </TableContainer>
               )}
             </Box>
           )}
+          {runError && (
+            <Alert severity="error" sx={{ mt: 2 }}>
+              {runError}
+            </Alert>
+          )}
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => { setRunDialogOpen(false); setRunResult(null) }}>
+          <Button onClick={() => { setRunDialogOpen(false); setRunResult(null); setRunPlan(null) }}>
             Close
           </Button>
           {!runResult && (
@@ -372,10 +480,10 @@ export default function DailyPage() {
               variant="contained"
               color="success"
               onClick={handleExecute}
-              disabled={runLoading || (runPlan?.total_remaining ?? 0) === 0}
+              disabled={runLoading || (runPlan?.total_to_post ?? 0) === 0}
               startIcon={runLoading ? <CircularProgress size={18} /> : <PlayArrowIcon />}
             >
-              {runLoading ? 'Creating Jobs...' : 'Confirm & Run'}
+              {runLoading ? 'Posting...' : 'Confirm & Post'}
             </Button>
           )}
         </DialogActions>

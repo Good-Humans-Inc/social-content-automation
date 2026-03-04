@@ -158,12 +158,12 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Log to database using admin client (bypasses RLS)
+    // Log to database as pending — actual success/failure is updated when GeeLark task completes (or when user views task detail).
     const adminSupabase = createAdminClient()
     const { error: logError } = await adminSupabase.from('logs').insert({
       type: 'video',
       account_id: account_id,
-      status: 'success',
+      status: 'pending',
       scheduled_time: new Date(scheduleAt * 1000).toISOString(),
       video_url: video_url,
       resource_url: resourceUrl,

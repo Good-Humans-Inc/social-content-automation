@@ -1,6 +1,7 @@
 'use client'
 
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
+import { useRouter } from 'next/navigation'
 import {
   Paper,
   Box,
@@ -89,11 +90,17 @@ const STATUS_LABELS: Record<number, string> = {
 }
 
 export default function LogsList({ initialLogs }: LogsListProps) {
+  const router = useRouter()
+  const [logs, setLogs] = useState<Log[]>(initialLogs)
   const [detailTaskId, setDetailTaskId] = useState<string | null>(null)
   const [detail, setDetail] = useState<TaskDetail | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
   const [detailLogs, setDetailLogs] = useState<string[]>([])
   const [detailSearchAfter, setDetailSearchAfter] = useState<unknown>(undefined)
+
+  useEffect(() => {
+    setLogs(initialLogs)
+  }, [initialLogs])
 
   const loadTaskDetail = useCallback(async (taskId: string, searchAfter?: unknown) => {
     setDetailLoading(true)
@@ -108,6 +115,18 @@ export default function LogsList({ initialLogs }: LogsListProps) {
       setDetail(data)
       setDetailLogs((prev) => (searchAfter == null ? (data.logs || []) : [...prev, ...(data.logs || [])]))
       setDetailSearchAfter(data.logContinue ? data.searchAfter : undefined)
+      // Sync log status from GeeLark: update our list and revalidate so Logs + Daily Summary show correct success/failed
+      const updated = json.updatedLog as { id: string; status: string; error_message: string | null } | undefined
+      if (updated?.id) {
+        setLogs((prev) =>
+          prev.map((l) =>
+            l.id === updated.id
+              ? { ...l, status: updated.status, error_message: updated.error_message ?? l.error_message }
+              : l
+          )
+        )
+        router.refresh()
+      }
     } catch (err) {
       setDetail(null)
       setDetailLogs([])
@@ -146,7 +165,8 @@ export default function LogsList({ initialLogs }: LogsListProps) {
     if (status === 'failed') return { text: 'Task failed', color: 'error' as const, msg }
     if (status === 'success' || status === 'completed') return { text: 'Task completed', color: 'success' as const, msg }
     if (status === 'skipped') return { text: 'Skipped', color: 'default' as const, msg }
-    return { text: status, color: 'default' as const, msg }
+    if (status === 'pending') return { text: 'Pending', color: 'warning' as const, msg }
+    return { text: status || 'Unknown', color: 'default' as const, msg }
   }
 
   return (
@@ -164,7 +184,7 @@ export default function LogsList({ initialLogs }: LogsListProps) {
             </TableRow>
           </TableHead>
           <TableBody>
-            {initialLogs.map((log) => {
+            {logs.map((log) => {
               const statusInfo = executionStatus(log)
               return (
                 <TableRow key={`${log.logType}-${log.id}`} hover>
@@ -207,7 +227,7 @@ export default function LogsList({ initialLogs }: LogsListProps) {
           </TableBody>
         </Table>
       </TableContainer>
-      {initialLogs.length === 0 && (
+      {logs.length === 0 && (
         <Typography color="text.secondary" textAlign="center" sx={{ py: 4 }}>
           No logs found
         </Typography>

@@ -1,5 +1,11 @@
 import { GeeLarkClient, GeeLarkError } from '@/lib/geelark'
+import { createAdminClient } from '@/lib/supabase/admin'
 import { NextRequest, NextResponse } from 'next/server'
+
+// GeeLark task status: 1=Waiting, 2=In progress, 3=Completed, 4=Failed, 7=Cancelled
+const GEELARK_STATUS_COMPLETED = 3
+const GEELARK_STATUS_FAILED = 4
+const GEELARK_STATUS_CANCELLED = 7
 
 async function fetchTaskDetail(taskId: string, searchAfter?: unknown) {
   const geelarkApiBase = process.env.GEELARK_API_BASE || 'https://openapi.geelark.com'
@@ -10,6 +16,38 @@ async function fetchTaskDetail(taskId: string, searchAfter?: unknown) {
   }
   const client = new GeeLarkClient(geelarkApiBase, geelarkApiKey, geelarkAppId)
   return client.getTaskDetail(taskId, searchAfter)
+}
+
+/** Sync our log row to match GeeLark task outcome so Logs and Daily Summary show correct success/failed. */
+async function syncLogStatusFromTask(
+  taskId: string,
+  geelarkStatus: number | undefined,
+  failDesc: string | undefined
+): Promise<{ id: string; status: string; error_message: string | null } | null> {
+  const status = geelarkStatus
+  if (status === undefined || status === null) return null
+  const isTerminal = [GEELARK_STATUS_COMPLETED, GEELARK_STATUS_FAILED, GEELARK_STATUS_CANCELLED].includes(status)
+  if (!isTerminal) return null
+
+  const supabase = createAdminClient()
+  const { data: logs } = await supabase
+    .from('logs')
+    .select('id, status')
+    .eq('task_id', taskId)
+    .limit(1)
+
+  const log = logs?.[0]
+  if (!log) return null
+
+  const newStatus = status === GEELARK_STATUS_COMPLETED ? 'success' : 'failed'
+  const errorMessage = status === GEELARK_STATUS_COMPLETED ? null : (failDesc || 'Task failed')
+
+  await supabase
+    .from('logs')
+    .update({ status: newStatus, error_message: errorMessage })
+    .eq('id', log.id)
+
+  return { id: log.id, status: newStatus, error_message: errorMessage }
 }
 
 /**
@@ -38,7 +76,12 @@ export async function GET(
       }
     }
     const detail = await fetchTaskDetail(taskId, searchAfter)
-    return NextResponse.json({ success: true, data: detail })
+    const updatedLog = await syncLogStatusFromTask(
+      taskId,
+      detail.status,
+      detail.failDesc
+    )
+    return NextResponse.json({ success: true, data: detail, updatedLog: updatedLog ?? undefined })
   } catch (error: unknown) {
     console.error('Task detail error:', error)
     return NextResponse.json(
@@ -70,7 +113,12 @@ export async function POST(
     const body = await request.json().catch(() => ({}))
     const searchAfter = body.searchAfter
     const detail = await fetchTaskDetail(taskId, searchAfter)
-    return NextResponse.json({ success: true, data: detail })
+    const updatedLog = await syncLogStatusFromTask(
+      taskId,
+      detail.status,
+      detail.failDesc
+    )
+    return NextResponse.json({ success: true, data: detail, updatedLog: updatedLog ?? undefined })
   } catch (error: unknown) {
     console.error('Task detail error:', error)
     return NextResponse.json(

@@ -1,9 +1,9 @@
-import { createClient } from '@/lib/supabase/server'
+import { createAdminClient } from '@/lib/supabase/admin'
 import { NextRequest, NextResponse } from 'next/server'
 
 export async function GET(request: NextRequest) {
   try {
-    const supabase = await createClient()
+    const supabase = createAdminClient()
     const searchParams = request.nextUrl.searchParams
     const dateParam = searchParams.get('date')
 
@@ -34,6 +34,31 @@ export async function GET(request: NextRequest) {
     const successCount = logs.filter((l: any) => l.status === 'success').length
     const failedCount = logs.filter((l: any) => l.status === 'failed').length
 
+    // Count available (completed + unposted) videos per account
+    const availableByAccount: Record<string, number> = {}
+    for (const account of accounts) {
+      const { count } = await supabase
+        .from('video_jobs')
+        .select('*', { count: 'exact', head: true })
+        .eq('account_id', account.id)
+        .eq('status', 'completed')
+        .not('video_url', 'is', null)
+        .is('posted_at', null)
+      availableByAccount[account.id] = count ?? 0
+    }
+
+    // Count videos posted today per account (from video_jobs.posted_at)
+    const postedTodayByAccount: Record<string, number> = {}
+    for (const account of accounts) {
+      const { count } = await supabase
+        .from('video_jobs')
+        .select('*', { count: 'exact', head: true })
+        .eq('account_id', account.id)
+        .gte('posted_at', startOfDay)
+        .lte('posted_at', endOfDay)
+      postedTodayByAccount[account.id] = count ?? 0
+    }
+
     const byAccount: Record<string, {
       name: string
       success: number
@@ -41,6 +66,8 @@ export async function GET(request: NextRequest) {
       total: number
       target: number
       byIntensity: Record<string, number>
+      available_videos: number
+      posted_today: number
     }> = {}
 
     for (const account of accounts) {
@@ -51,6 +78,8 @@ export async function GET(request: NextRequest) {
         total: 0,
         target: account.daily_post_target ?? 2,
         byIntensity: { T0: 0, T1: 0, T2: 0 },
+        available_videos: availableByAccount[account.id] || 0,
+        posted_today: postedTodayByAccount[account.id] || 0,
       }
     }
 
@@ -64,6 +93,8 @@ export async function GET(request: NextRequest) {
           total: 0,
           target: 2,
           byIntensity: { T0: 0, T1: 0, T2: 0 },
+          available_videos: availableByAccount[aid] || 0,
+          posted_today: postedTodayByAccount[aid] || 0,
         }
       }
       byAccount[aid].total++
@@ -99,6 +130,10 @@ export async function GET(request: NextRequest) {
       .slice(0, 5)
       .map(([reason, count]) => ({ reason, count }))
 
+    // Total available and posted today across all accounts
+    const totalAvailable = Object.values(availableByAccount).reduce((s, n) => s + n, 0)
+    const totalPostedToday = Object.values(postedTodayByAccount).reduce((s, n) => s + n, 0)
+
     return NextResponse.json({
       date: targetDate,
       totalPosts,
@@ -108,6 +143,8 @@ export async function GET(request: NextRequest) {
       byAccount,
       topFailReasons,
       recentLogs: logs.slice(0, 20),
+      totalAvailable,
+      totalPostedToday,
     })
   } catch (error: any) {
     return NextResponse.json(
