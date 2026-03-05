@@ -15,8 +15,10 @@ import {
 import SearchIcon from '@mui/icons-material/Search'
 import TemplatesList from './TemplatesList'
 import TemplateCreateButton from './TemplateCreateButton'
+import TemplateGenerateByTierDialog from './TemplateGenerateByTierDialog'
 import Link from 'next/link'
 import { Button, Container } from '@mui/material'
+import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh'
 
 const PAGE_SIZE = 10
 const INTENSITY_OPTIONS = [
@@ -51,6 +53,7 @@ export default function TemplatesPageContent() {
   const [pagination, setPagination] = useState({ total: 0, totalPages: 0 })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [generateByTierOpen, setGenerateByTierOpen] = useState(false)
 
   const fetchTemplates = useCallback(async () => {
     setLoading(true)
@@ -126,6 +129,14 @@ export default function TemplatesPageContent() {
         </Typography>
         <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
           <TemplateCreateButton />
+          <Button
+            variant="contained"
+            color="secondary"
+            startIcon={<AutoFixHighIcon />}
+            onClick={() => setGenerateByTierOpen(true)}
+          >
+            Generate by tier
+          </Button>
           <Link href="/api/templates/export" style={{ textDecoration: 'none' }}>
             <Button variant="contained" color="success">
               Export JSONL
@@ -218,6 +229,12 @@ export default function TemplatesPageContent() {
             )}
           </>
         )}
+
+        <TemplateGenerateByTierDialog
+          open={generateByTierOpen}
+          onClose={() => setGenerateByTierOpen(false)}
+          onSuccess={fetchTemplates}
+        />
       </Stack>
     </Container>
   )

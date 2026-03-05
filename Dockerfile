@@ -1,4 +1,4 @@
-# Video generation job worker for Cloud Run Jobs (Python + ffmpeg)
+# Video generation job worker for Cloud Run Service/Jobs (Python + ffmpeg)
 FROM python:3.11-slim
 
 # Install ffmpeg and a fallback font for text overlay (if fonts/ not provided)
@@ -19,7 +19,9 @@ COPY src ./src
 # Default font in image is DejaVu (installed above); override with FONT_PATH in Cloud Run if needed.
 ENV FONT_PATH=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf
 
-# Default: run the worker (Cloud Run Job will override env vars)
+# Default: run the worker (works as both Cloud Run Service and Job)
 ENV OUTPUT_DIR=/tmp/output
 ENV PYTHONUNBUFFERED=1
+ENV PORT=8080
+EXPOSE 8080
 CMD ["python", "-m", "src.run_worker"]

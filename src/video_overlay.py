@@ -206,6 +206,18 @@ def _ensure_ffmpeg_available() -> None:
         raise RuntimeError("ffmpeg not found in PATH. Please install ffmpeg and try again.")
 
 
+def _loop_filter(duration: float, fps: int = 30) -> str:
+    """Build a finite-count loop filter instead of loop=-1 (infinite).
+
+    loop=N:1:0 repeats the single input frame N extra times (total = N+1 frames).
+    Using a finite count prevents ffmpeg from buffering an infinite stream,
+    which can OOM on memory-constrained environments like Cloud Run.
+    We add a small margin so the stream is slightly longer than ``-t`` needs.
+    """
+    frames_needed = int(duration * fps) + fps  # +1 s margin
+    return f"loop={frames_needed}:1:0,setpts=N/{fps}/TB"
+
+
 def overlay_text_on_video(
     input_path: str,
     output_path: str,
@@ -352,9 +364,9 @@ def create_video_from_images(
     """
     Create a video from multiple images with text overlay in the middle.
 
-    Uses the loop video filter (loop=-1:1:0) to hold each single-image input
-    for the desired duration. This avoids the -stream_loop hang on Debian FFmpeg
-    and the removed -loop option on FFmpeg 6+.
+    Uses a finite-count loop video filter to hold each single-image input
+    for the desired duration. This avoids the -stream_loop hang on Debian FFmpeg,
+    the removed -loop option on FFmpeg 6+, and OOM on memory-constrained containers.
 
     Args:
         image_paths: List of image file paths to convert to video
@@ -437,26 +449,25 @@ def create_video_from_images(
                 pad_filter = f"pad={standard_width}:{standard_height}:(ow-iw)/2:(oh-ih)/2:color=black"
                 # Ensure dimensions are even (required for H.264 yuv420p)
                 even_dim_filter = f"scale=trunc(iw/2)*2:trunc(ih/2)*2"
-                # Use the loop video filter to hold the single image for the desired duration.
-                # loop=-1:1:0 = infinite loops, 1 frame, start at frame 0.
-                loop_filter = "loop=-1:1:0,setpts=N/30/TB"
-                filtergraph = f"{loop_filter},{scale_filter},{pad_filter},{even_dim_filter},{text_filter}"
+                lf = _loop_filter(rapid_duration)
+                filtergraph = f"{lf},{scale_filter},{pad_filter},{even_dim_filter},{text_filter}"
                 
                 if diversification:
                     div_filters = _build_diversification_filters(diversification)
                     if div_filters:
-                        filtergraph = f"{loop_filter}," + ",".join(div_filters) + f",{scale_filter},{pad_filter},{even_dim_filter},{text_filter}"
+                        filtergraph = f"{lf}," + ",".join(div_filters) + f",{scale_filter},{pad_filter},{even_dim_filter},{text_filter}"
 
                 img_abs = os.path.abspath(img_path).replace("\\", "/")
                 cmd = [
                     "ffmpeg",
-                    "-y",
+                    "-y", "-threads", "1",
                     "-i", img_abs,
                     "-vf", filtergraph,
                     "-t", str(rapid_duration),
                     "-c:v", "libx264",
-                    "-preset", "ultrafast",  # Faster encode for per-slide (final concat keeps veryfast)
+                    "-preset", "ultrafast",
                     "-crf", "18",
+                    "-threads", "1",
                     "-pix_fmt", "yuv420p",
                     "-r", "30",
                     slide_video.replace("\\", "/"),
@@ -563,12 +574,12 @@ def create_video_from_images(
         scale_filter = f"scale={standard_width}:{standard_height}:force_original_aspect_ratio=decrease"
         pad_filter = f"pad={standard_width}:{standard_height}:(ow-iw)/2:(oh-ih)/2:color=black"
         even_dim_filter = f"scale=trunc(iw/2)*2:trunc(ih/2)*2"
-        loop_filter = "loop=-1:1:0,setpts=N/30/TB"
+        lf = _loop_filter(image_duration)
         if diversification:
             div_filters = _build_diversification_filters(diversification)
-            filtergraph_base = f"{loop_filter}," + (",".join(div_filters) + f",{scale_filter},{pad_filter},{even_dim_filter},{text_filter}" if div_filters else f"{scale_filter},{pad_filter},{even_dim_filter},{text_filter}")
+            filtergraph_base = f"{lf}," + (",".join(div_filters) + f",{scale_filter},{pad_filter},{even_dim_filter},{text_filter}" if div_filters else f"{scale_filter},{pad_filter},{even_dim_filter},{text_filter}")
         else:
-            filtergraph_base = f"{loop_filter},{scale_filter},{pad_filter},{even_dim_filter},{text_filter}"
+            filtergraph_base = f"{lf},{scale_filter},{pad_filter},{even_dim_filter},{text_filter}"
 
         max_workers = int(os.environ.get("VIDEO_SLIDE_WORKERS", "1"))
         if max_workers < 1:
@@ -584,9 +595,10 @@ def create_video_from_images(
             slide_video = os.path.join(tmpdir, f"slide_{i:03d}.mp4")
             img_abs = os.path.abspath(img_path).replace("\\", "/")
             cmd = [
-                "ffmpeg", "-y", "-i", img_abs,
+                "ffmpeg", "-y", "-threads", "1", "-i", img_abs,
                 "-vf", filtergraph_base, "-t", str(image_duration),
                 "-c:v", "libx264", "-preset", "ultrafast", "-crf", "18",
+                "-threads", "1",
                 "-pix_fmt", "yuv420p", "-r", "30", slide_video.replace("\\", "/"),
             ]
             slide_timeout = int(os.environ.get("VIDEO_SLIDE_TIMEOUT_SECONDS", "120"))
@@ -751,7 +763,7 @@ def _render_type_a(
     W, H = 1080, 1920
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        filters: List[str] = ["loop=-1:1:0", "setpts=N/30/TB"]
+        filters: List[str] = [_loop_filter(duration)]
         input_args = ["-i", os.path.abspath(image_path).replace("\\", "/")]
 
         ken_burns = diversification.get("ken_burns", False)
@@ -810,7 +822,7 @@ def _render_type_b(
         text_animation = "line_by_line"
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        filters: List[str] = ["loop=-1:1:0", "setpts=N/30/TB"]
+        filters: List[str] = [_loop_filter(duration)]
         input_args = ["-i", os.path.abspath(image_path).replace("\\", "/")]
 
         filters.append(f"scale={W}:{H}:force_original_aspect_ratio=decrease")

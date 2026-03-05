@@ -25,6 +25,8 @@ Optional:
 import os
 import sys
 import logging
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 
 # Add parent directory to path to allow imports
@@ -45,6 +47,30 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger(__name__)
+
+_worker_healthy = True
+
+
+class _HealthHandler(BaseHTTPRequestHandler):
+    """Minimal handler for Cloud Run health checks."""
+
+    def do_GET(self):
+        status = 200 if _worker_healthy else 503
+        self.send_response(status)
+        self.send_header("Content-Type", "text/plain")
+        self.end_headers()
+        self.wfile.write(b"ok" if _worker_healthy else b"unhealthy")
+
+    def log_message(self, format, *args):
+        pass  # suppress per-request logs
+
+
+def _start_health_server(port: int) -> None:
+    """Start HTTP health-check server in a daemon thread."""
+    server = HTTPServer(("0.0.0.0", port), _HealthHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    logger.info("Health-check server listening on port %d", port)
 
 
 def main():
@@ -88,6 +114,11 @@ def main():
     logger.info("Press Ctrl+C to stop")
     logger.info("=" * 60)
 
+    # Cloud Run Services require an HTTP listener on PORT for health checks
+    port = int(os.getenv("PORT", "8080"))
+    _start_health_server(port)
+
+    global _worker_healthy
     try:
         run_worker(
             poll_interval=poll_interval,
@@ -98,6 +129,7 @@ def main():
     except KeyboardInterrupt:
         logger.info("\nWorker stopped by user")
     except Exception as e:
+        _worker_healthy = False
         logger.error(f"Worker error: {e}", exc_info=True)
         sys.exit(1)
 
