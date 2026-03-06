@@ -186,10 +186,11 @@ export async function POST(request: NextRequest) {
           return TASK_STATUS_DONE.includes(s as never) || TASK_STATUS_FAILED.includes(s as never)
         })
         if (allDone) {
+          const taskIdStr = (id: unknown) => (id != null ? String(id) : '')
           for (const t of tasks) {
             const status = TASK_STATUS_FAILED.includes(t.status as never) ? 'failed' : 'success'
             const taskId = t.taskId ?? t.id ?? t.task_id
-            const log = logs.find((l) => l.taskId === taskId)
+            const log = logs.find((l) => l.taskId != null && taskIdStr(l.taskId) === taskIdStr(taskId))
             if (log) {
               log.status = status
               log.message = status === 'success' ? 'Warmup completed' : `Task status: ${t.status}`
@@ -203,9 +204,9 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Mark any still-running as skipped or timeout
+    // Mark only logs we never got a final status for (taskId set but still "Phone started") as skipped/timeout
     logs.forEach((l) => {
-      if (l.status === 'success' && l.message === 'Phone started') {
+      if (l.taskId && l.status === 'success' && l.message === 'Phone started') {
         l.status = 'skipped'
         l.message = 'Warmup task started; status check timed out or unavailable'
       }
