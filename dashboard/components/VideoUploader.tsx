@@ -25,6 +25,8 @@ interface Video {
   video_url: string
   template_id?: string
   account_id: string
+  post_type?: string
+  slide_urls?: string[]
   created_at?: string
   templates?: {
     caption: string
@@ -201,16 +203,21 @@ export default function VideoUploader({ videos, onUploadSuccess }: VideoUploader
     try {
       const video = videos.find((v) => v.video_url === selectedVideo)
       const templateId = selectedTemplate || video?.template_id || null
+      const isCarousel = video?.post_type === 'carousel' && Array.isArray(video?.slide_urls) && video.slide_urls.length > 0
 
       const response = await fetch('/api/videos/upload-geelark', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          video_url: selectedVideo,
+          video_url: isCarousel ? undefined : selectedVideo,
           account_id: selectedAccount,
           template_id: templateId,
           caption: caption || undefined,
           schedule_minutes: scheduleMinutesFromNow,
+          ...(isCarousel && {
+            post_type: 'carousel',
+            slide_urls: video!.slide_urls,
+          }),
         }),
       })
 
@@ -221,7 +228,9 @@ export default function VideoUploader({ videos, onUploadSuccess }: VideoUploader
       }
 
       setSuccess(
-        `Video uploaded successfully! Task ID: ${data.taskId}. Scheduled for ${new Date(data.scheduledTime).toLocaleString()}`
+        data.carousel
+          ? `Carousel (${data.slideCount} slides) uploaded successfully! Task ID: ${data.taskId}. Scheduled for ${new Date(data.scheduledTime).toLocaleString()}`
+          : `Video uploaded successfully! Task ID: ${data.taskId}. Scheduled for ${new Date(data.scheduledTime).toLocaleString()}`
       )
 
       setSelectedVideo('')

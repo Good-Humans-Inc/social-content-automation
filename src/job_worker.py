@@ -814,6 +814,11 @@ def _process_carousel_job(job: Dict[str, Any], template: Template, account: Dict
     if skipped_car:
         add_job_log(job_id, "warning", f"Skipped {skipped_car}/{len(image_asset_ids)} images, continuing with {len(image_paths)}")
 
+    if grid_mode and len(image_paths) % 4 != 0:
+        raise ValueError(
+            f"Carousel grid layout requires a multiple of 4 images (4, 8, 12, ...). Got {len(image_paths)}."
+        )
+
     # Handle music
     audio_path = None
     if music_url_str:
@@ -826,7 +831,14 @@ def _process_carousel_job(job: Dict[str, Any], template: Template, account: Dict
         if not download_asset(music_asset_id, audio_path):
             audio_path = None
 
-    grid_mode = template.carousel_type == "character_grid" or template.grid_images == 4
+    # Grid mode: 4 images per slide (2x2). Set by template or job-level carousel_layout.
+    job_layout = (job.get("carousel_layout") or "").strip().lower()
+    if job_layout == "grid":
+        grid_mode = True
+    elif job_layout == "single":
+        grid_mode = False
+    else:
+        grid_mode = template.carousel_type == "character_grid" or template.grid_images == 4
 
     if grid_mode:
         first_slide_texts = [f"Your {character_name} character"]
@@ -887,6 +899,8 @@ def _process_carousel_job(job: Dict[str, Any], template: Template, account: Dict
         updates: Dict[str, Any] = {"render_path": final_video}
         if video_url:
             updates["video_url"] = video_url
+        if slide_image_urls:
+            updates["slide_urls"] = slide_image_urls
         supabase.table("video_jobs").update(updates).eq("id", job_id).execute()
 
     update_job_status(job_id, "completed", progress=100)

@@ -44,6 +44,7 @@ export default function TemplateGenerateByTierDialog({
   onSuccess,
 }: TemplateGenerateByTierDialogProps) {
   const [tier, setTier] = useState<'T0' | 'T1' | 'T2'>('T0')
+  const [format, setFormat] = useState<'video' | 'carousel'>('video')
   const [n, setN] = useState(10)
   const [persona, setPersona] = useState('anime_otome')
   const [fandomFilter, setFandomFilter] = useState<string>('')
@@ -55,7 +56,7 @@ export default function TemplateGenerateByTierDialog({
   const [loading, setLoading] = useState(false)
   const [fetchingNextId, setFetchingNextId] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [result, setResult] = useState<{ created: number; start_id: number; ids: string[]; errors?: string[] } | null>(null)
+  const [result, setResult] = useState<{ created: number; format?: string; start_id: number; ids: string[]; errors?: string[] } | null>(null)
 
   useEffect(() => {
     if (!open) return
@@ -84,6 +85,7 @@ export default function TemplateGenerateByTierDialog({
     try {
       const body: Record<string, unknown> = {
         tier,
+        format,
         n,
         persona: persona.trim() || 'anime_otome',
       }
@@ -110,6 +112,7 @@ export default function TemplateGenerateByTierDialog({
       }
       setResult({
         created: data.created ?? 0,
+        format: data.format ?? format,
         start_id: data.start_id ?? startId,
         ids: data.ids ?? [],
         errors: data.errors,
@@ -145,6 +148,29 @@ export default function TemplateGenerateByTierDialog({
       </DialogTitle>
       <DialogContent>
         <Stack spacing={2.5} sx={{ pt: 0.5 }}>
+          <Box>
+            <Typography variant="subtitle2" color="text.secondary" gutterBottom>
+              Format
+            </Typography>
+            <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
+              <Chip
+                label="Video"
+                onClick={() => setFormat('video')}
+                color="primary"
+                variant={format === 'video' ? 'filled' : 'outlined'}
+              />
+              <Chip
+                label="Carousel (multi-slide)"
+                onClick={() => setFormat('carousel')}
+                color="secondary"
+                variant={format === 'carousel' ? 'filled' : 'outlined'}
+              />
+            </Box>
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+              {format === 'video' ? 'Single-overlay video templates (1–2 lines).' : 'Multi-slide carousel templates (3–10 slides, hook → body → closer).'}
+            </Typography>
+          </Box>
+
           <Box>
             <Typography variant="subtitle2" color="text.secondary" gutterBottom>
               Tier
@@ -260,7 +286,7 @@ export default function TemplateGenerateByTierDialog({
 
           {result && (
             <Alert severity={result.created > 0 ? 'success' : 'info'}>
-              Created {result.created} template(s) starting at ID {result.start_id}.
+              Created {result.created} {result.format === 'carousel' ? 'carousel' : 'video'} template(s) starting at ID {result.start_id}.
               {result.errors && result.errors.length > 0 && (
                 <Typography variant="caption" display="block" sx={{ mt: 1 }}>
                   Warnings: {result.errors.slice(0, 3).join('; ')}

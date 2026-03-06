@@ -3,9 +3,22 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { NextRequest, NextResponse } from 'next/server'
 import OpenAI from 'openai'
 import { getPromptForTier } from './prompts'
+import {
+  getCarouselPromptForTier,
+  validateCarouselEntry,
+  type CarouselEntry,
+} from './carouselPrompts'
 
 const TIERS = ['T0', 'T1', 'T2'] as const
 type Tier = (typeof TIERS)[number]
+
+/** Template format: 'video' = single-overlay video templates; 'carousel' = multi-slide carousel (3–10 slides). */
+const FORMATS = ['video', 'carousel'] as const
+type TemplateFormat = (typeof FORMATS)[number]
+
+function isTemplateFormat(value: unknown): value is TemplateFormat {
+  return typeof value === 'string' && FORMATS.includes(value as TemplateFormat)
+}
 
 function getOpenAIClient(): OpenAI {
   const apiKey = process.env.OPENAI_API_KEY
@@ -122,6 +135,7 @@ export async function POST(request: NextRequest) {
       start_id: startIdParam,
       custom_fandom: customFandom,
       custom_fandom_only: customFandomOnly,
+      format: formatParam,
     } = body as {
       tier?: string
       n?: number
@@ -130,7 +144,10 @@ export async function POST(request: NextRequest) {
       start_id?: number
       custom_fandom?: string
       custom_fandom_only?: boolean
+      format?: string
     }
+
+    const format: TemplateFormat = isTemplateFormat(formatParam) ? formatParam : 'video'
 
     const tierNorm = tier ? String(tier).toUpperCase() : ''
     if (!TIERS.includes(tierNorm as Tier)) {
@@ -155,14 +172,22 @@ export async function POST(request: NextRequest) {
       customFandomOnly: !!customFandomOnly,
     })
 
-    const prompt = getPromptForTier(tierNorm as Tier, {
-      N,
-      persona: personaStr,
-      start_id,
-      fandom_rows,
-    })
-
     const openai = getOpenAIClient()
+    const prompt =
+      format === 'carousel'
+        ? getCarouselPromptForTier(tierNorm as Tier, {
+            N,
+            persona: personaStr,
+            start_id,
+            fandom_rows,
+          })
+        : getPromptForTier(tierNorm as Tier, {
+            N,
+            persona: personaStr,
+            start_id,
+            fandom_rows,
+          })
+
     const completion = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [
@@ -180,6 +205,111 @@ export async function POST(request: NextRequest) {
       .map((l) => l.trim())
       .filter(Boolean)
 
+    const errors: string[] = []
+    const supabase = await createClient()
+
+    if (format === 'carousel') {
+      const carouselTemplates: Array<{
+        id: string
+        persona: string
+        fandom: string
+        intensity: string
+        overlay: string[]
+        caption: string
+        tags: string[]
+        carousel_type: string
+        used: null
+      }> = []
+
+      for (const line of lines) {
+        try {
+          const parsed = JSON.parse(line) as Record<string, unknown>
+          const entry: CarouselEntry = {
+            id: typeof parsed.id === 'string' ? parsed.id.trim() : '',
+            persona: typeof parsed.persona === 'string' ? parsed.persona.trim() : personaStr,
+            fandom: typeof parsed.fandom === 'string' ? parsed.fandom.trim() : '',
+            intensity: (typeof parsed.intensity === 'string' ? parsed.intensity.trim() : tierNorm) as 'T0' | 'T1' | 'T2',
+            format: 'carousel',
+            slide_count: typeof parsed.slide_count === 'number' ? parsed.slide_count : 0,
+            slides: Array.isArray(parsed.slides)
+              ? (parsed.slides as Array<{ slide: number; overlay: string[] }>).map((s) => ({
+                  slide: s.slide,
+                  overlay: Array.isArray(s.overlay) ? (s.overlay as string[]).filter((x) => typeof x === 'string') : [],
+                }))
+              : [],
+            caption: typeof parsed.caption === 'string' ? parsed.caption.trim() : '',
+            tags: Array.isArray(parsed.tags)
+              ? (parsed.tags as string[]).map((t) => {
+                  const s = typeof t === 'string' ? t.trim() : ''
+                  return s ? (s.startsWith('#') ? s : `#${s}`) : ''
+                }).filter(Boolean)
+              : [],
+            used: null,
+          }
+
+          const validationErrors = validateCarouselEntry(entry)
+          if (validationErrors.length > 0) {
+            errors.push(`${entry.id || 'entry'}: ${validationErrors.join('; ')}`)
+            continue
+          }
+
+          const overlayForDb = entry.slides.map((s) => s.overlay.join('\n'))
+          carouselTemplates.push({
+            id: entry.id,
+            persona: entry.persona,
+            fandom: entry.fandom,
+            intensity: entry.intensity,
+            overlay: overlayForDb,
+            caption: entry.caption,
+            tags: entry.tags,
+            carousel_type: 'multi_slide',
+            used: null,
+          })
+        } catch (e) {
+          errors.push(`Parse error: ${line.slice(0, 80)}...`)
+        }
+      }
+
+      if (carouselTemplates.length === 0) {
+        return NextResponse.json(
+          {
+            error: 'No valid carousel templates could be parsed from the model output.',
+            raw_preview: content.slice(0, 500),
+            parse_errors: errors,
+          },
+          { status: 422 }
+        )
+      }
+
+      const inserted: string[] = []
+      for (const t of carouselTemplates) {
+        const { error: insertError } = await supabase.from('templates').insert({
+          id: t.id,
+          persona: t.persona,
+          fandom: t.fandom,
+          intensity: t.intensity,
+          overlay: t.overlay,
+          caption: t.caption,
+          tags: t.tags,
+          carousel_type: t.carousel_type,
+          used: null,
+        })
+        if (insertError) {
+          errors.push(`${t.id}: ${insertError.message}`)
+        } else {
+          inserted.push(t.id)
+        }
+      }
+
+      return NextResponse.json({
+        created: inserted.length,
+        format: 'carousel',
+        start_id,
+        ids: inserted,
+        errors: errors.length > 0 ? errors : undefined,
+      })
+    }
+
     const templates: Array<{
       id: string
       persona: string
@@ -190,7 +320,6 @@ export async function POST(request: NextRequest) {
       tags: string[]
       used: null
     }> = []
-    const errors: string[] = []
 
     for (const line of lines) {
       try {
@@ -241,7 +370,6 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const supabase = await createClient()
     const inserted: string[] = []
     for (const t of templates) {
       const { error: insertError } = await supabase.from('templates').insert({
@@ -263,6 +391,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       created: inserted.length,
+      format: 'video',
       start_id,
       ids: inserted,
       errors: errors.length > 0 ? errors : undefined,

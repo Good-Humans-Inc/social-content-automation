@@ -15,10 +15,10 @@ export async function GET(request: NextRequest) {
     const limit = parseInt(searchParams.get('limit') || '50')
     const accountId = searchParams.get('account_id')
 
-    // Fetch completed video jobs that have a video_url
+    // Fetch completed video jobs that have a video_url (include slide_urls for carousel posts)
     let query = supabase
       .from('video_jobs')
-      .select('id, template_id, account_id, post_type, status, video_url, created_at, templates(caption), accounts(display_name)')
+      .select('id, template_id, account_id, post_type, status, video_url, slide_urls, created_at, templates(caption), accounts(display_name)')
       .eq('status', 'completed')
       .not('video_url', 'is', null)
       .order('created_at', { ascending: false })

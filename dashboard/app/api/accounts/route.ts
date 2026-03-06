@@ -103,7 +103,7 @@ export async function PATCH(request: NextRequest) {
 
     const allowedFields = [
       'display_name', 'persona', 'preferred_fandoms', 'preferred_intensity',
-      'video_source', 'daily_post_target', 'intensity_ratio',
+      'video_source', 'daily_post_target', 'intensity_ratio', 'logged_in',
     ]
     const sanitized: Record<string, any> = {}
     for (const key of allowedFields) {

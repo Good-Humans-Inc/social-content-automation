@@ -90,13 +90,13 @@ export async function POST(request: NextRequest) {
     const startOfDay = `${today}T00:00:00.000Z`
     const endOfDay = `${today}T23:59:59.999Z`
 
-    // Count success + pending video/slideshow posts today so "X/2 posted" and remaining slots include scheduled
+    // Count success + pending video/slideshow/carousel posts today so "X/2 posted" and remaining slots include scheduled
     const { data: todayLogs } = await supabase
       .from('logs')
       .select('account_id, type')
       .gte('created_at', startOfDay)
       .lte('created_at', endOfDay)
-      .in('type', ['video', 'slideshow'])
+      .in('type', ['video', 'slideshow', 'carousel'])
       .in('status', ['success', 'pending'])
 
     const postedToday: Record<string, number> = {}
@@ -107,6 +107,7 @@ export async function POST(request: NextRequest) {
     // 3. For each account, find completed + unposted videos
     type VideoDetail = {
       id: string; template_id: string; video_url: string; created_at: string;
+      post_type?: string; slide_urls?: string[];
       templates?: { caption: string; fandom: string; intensity: string } | null
     }
     const plan: Array<{
@@ -125,10 +126,10 @@ export async function POST(request: NextRequest) {
       const posted = postedToday[account.id] || 0
       const remaining = Math.max(0, target - posted)
 
-      // Fetch all completed + unposted videos for this account (for selection UI)
+      // Fetch all completed + unposted videos for this account (include post_type, slide_urls for carousel)
       const { data: readyVideos } = await supabase
         .from('video_jobs')
-        .select('id, template_id, video_url, created_at, templates(caption, fandom, intensity)')
+        .select('id, template_id, video_url, post_type, slide_urls, created_at, templates(caption, fandom, intensity)')
         .eq('account_id', account.id)
         .eq('status', 'completed')
         .not('video_url', 'is', null)
@@ -206,14 +207,19 @@ export async function POST(request: NextRequest) {
           // Derive base URL from the incoming request so it works in any environment
           const baseUrl = request.nextUrl.origin
 
+          const isCarousel = video.post_type === 'carousel' && Array.isArray(video.slide_urls) && video.slide_urls.length > 0
           const uploadRes = await fetch(`${baseUrl}/api/videos/upload-geelark`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              video_url: video.video_url,
+              video_url: isCarousel ? undefined : video.video_url,
               account_id: item.account_id,
               template_id: video.template_id,
               schedule_minutes: scheduleMinutes,
+              ...(isCarousel && {
+                post_type: 'carousel',
+                slide_urls: video.slide_urls,
+              }),
             }),
           })
 

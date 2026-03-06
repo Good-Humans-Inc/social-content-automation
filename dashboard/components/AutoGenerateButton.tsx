@@ -33,13 +33,23 @@ const FANDOM_OPTIONS: { value: string; label: string }[] = [
   { value: 'generic_anime', label: 'Generic Anime' },
 ]
 
+// Generation mode: video = rapid videos only; carousel = 4-image grid carousels only; both = both (scalable for future modes)
+const MODE_OPTIONS: { value: 'video' | 'carousel' | 'both'; label: string; description: string }[] = [
+  { value: 'video', label: 'Videos only', description: 'Rapid slideshow video jobs (35 images, 0.2s each)' },
+  { value: 'carousel', label: 'Carousels only', description: '4-image grid carousel jobs (character_grid templates)' },
+  { value: 'both', label: 'Videos and carousels', description: 'Create both video and carousel jobs' },
+]
+
 export default function AutoGenerateButton({ onSuccess }: AutoGenerateButtonProps) {
   const [open, setOpen] = useState(false)
   const [fandom, setFandom] = useState('')
+  const [mode, setMode] = useState<'video' | 'carousel' | 'both'>('video')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [result, setResult] = useState<{
     created: number
+    createdVideos?: number
+    createdCarousels?: number
     accountsUsed?: number
     errors?: string[]
     debug?: {
@@ -70,7 +80,7 @@ export default function AutoGenerateButton({ onSuccess }: AutoGenerateButtonProp
       const res = await fetch('/api/jobs/auto-generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ fandom, debug: includeDebug }),
+        body: JSON.stringify({ fandom, mode, debug: includeDebug }),
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) {
@@ -79,6 +89,8 @@ export default function AutoGenerateButton({ onSuccess }: AutoGenerateButtonProp
       }
       setResult({
         created: data.created?.length ?? 0,
+        createdVideos: data.createdVideos?.length ?? 0,
+        createdCarousels: data.createdCarousels?.length ?? 0,
         accountsUsed: data.accountsUsed,
         errors: data.errors,
         debug: data.debug,
@@ -112,13 +124,13 @@ export default function AutoGenerateButton({ onSuccess }: AutoGenerateButtonProp
       </Button>
 
       <Dialog open={open} onClose={handleClose} maxWidth="sm" fullWidth>
-        <DialogTitle>Auto Generate Videos</DialogTitle>
+        <DialogTitle>Auto Generate Jobs</DialogTitle>
         <DialogContent>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-            Creates one video job for every unused template in the selected fandom. Jobs are
-            distributed evenly across all accounts (1–2 per account) so each account has videos
-            ready for daily upload. Character images are chosen from tags (e.g. #inumaki, #miwa);
-            templates whose character isn&apos;t scraped yet are skipped and listed below.
+            Creates jobs for every unused template in the selected fandom. Choose whether to
+            generate videos (rapid slideshow), carousels (4-image grid), or both. Jobs are
+            distributed across accounts. Character images are chosen from tags; templates whose
+            character isn&apos;t scraped yet are skipped and listed below.
           </Typography>
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: 1 }}>
             <FormControl fullWidth required>
@@ -131,6 +143,23 @@ export default function AutoGenerateButton({ onSuccess }: AutoGenerateButtonProp
                 {FANDOM_OPTIONS.map((opt) => (
                   <MenuItem key={opt.value} value={opt.value}>
                     {opt.label}
+                  </MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+            <FormControl fullWidth required>
+              <InputLabel>Generate</InputLabel>
+              <Select
+                value={mode}
+                onChange={(e) => setMode(e.target.value as 'video' | 'carousel' | 'both')}
+                label="Generate"
+              >
+                {MODE_OPTIONS.map((opt) => (
+                  <MenuItem key={opt.value} value={opt.value}>
+                    <Box>
+                      <Typography variant="body2" fontWeight="medium">{opt.label}</Typography>
+                      <Typography variant="caption" color="text.secondary" display="block">{opt.description}</Typography>
+                    </Box>
                   </MenuItem>
                 ))}
               </Select>
@@ -152,7 +181,12 @@ export default function AutoGenerateButton({ onSuccess }: AutoGenerateButtonProp
             {result && (
               <Alert severity={result.created > 0 ? 'success' : 'info'}>
                 {result.created > 0
-                  ? `Created ${result.created} video job(s) across ${result.accountsUsed ?? '?'} account(s) (1–2 per account for daily upload).`
+                  ? (() => {
+                      const parts: string[] = []
+                      if (result.createdVideos) parts.push(`${result.createdVideos} video(s)`)
+                      if (result.createdCarousels) parts.push(`${result.createdCarousels} carousel(s)`)
+                      return `Created ${parts.join(' and ')} across ${result.accountsUsed ?? '?'} account(s).`
+                    })()
                   : 'No jobs were created.'}
                 {result.errors?.length ? (
                   <Box component="ul" sx={{ mt: 1, pl: 2, mb: 0 }}>

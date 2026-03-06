@@ -3,7 +3,16 @@ import { NextRequest, NextResponse } from 'next/server'
 import { listSubcategoriesFromGcs, isGcsConfigured } from '@/lib/gcs'
 
 const IMAGES_PER_VIDEO = 35
+const IMAGES_PER_CAROUSEL = 4 // 4 images = one 2x2 grid slide (plus first text slide)
 const PREFERRED_MUSIC_GENRE = 'phonk'
+
+/** Generation modes: 'video' = rapid video jobs only; 'carousel' = carousel (grid) jobs only; 'both' = both. Extend this array to add new modes (e.g. 'slideshow'). */
+export const GENERATION_MODES = ['video', 'carousel', 'both'] as const
+export type GenerationMode = (typeof GENERATION_MODES)[number]
+
+function isGenerationMode(value: unknown): value is GenerationMode {
+  return typeof value === 'string' && GENERATION_MODES.includes(value as GenerationMode)
+}
 
 // Map template fandom to assets category (folder structure)
 const FANDOM_TO_CATEGORY: Record<string, string> = {
@@ -102,12 +111,14 @@ export async function POST(request: NextRequest) {
   try {
     const supabase = await createClient()
     const body = await request.json().catch(() => ({}))
-    const { fandom: fandomFilter, debug: debugMode } = body
+    const { fandom: fandomFilter, debug: debugMode, mode: modeParam } = body
+
+    const mode: GenerationMode = isGenerationMode(modeParam) ? modeParam : 'video'
 
     const fandomCategory = typeof fandomFilter === 'string' && fandomFilter.trim() ? fandomFilter.trim().toLowerCase() : null
     if (!fandomCategory) {
       return NextResponse.json(
-        { error: 'fandom is required. Choose a fandom to create videos for all its unused templates.' },
+        { error: 'fandom is required. Choose a fandom to create jobs for all its unused templates.' },
         { status: 400 }
       )
     }
@@ -120,47 +131,12 @@ export async function POST(request: NextRequest) {
 
     if (accountsError || !accounts?.length) {
       return NextResponse.json(
-        { error: 'No accounts found. Add at least one account to distribute video jobs.' },
+        { error: 'No accounts found. Add at least one account to distribute jobs.' },
         { status: 400 }
       )
     }
 
-    // Fetch all unused templates for this fandom (suitable for rapid: have overlay, not character_grid)
-    const { data: templates, error: templatesError } = await supabase
-      .from('templates')
-      .select('id, fandom, tags, overlay, carousel_type')
-      .is('used', null)
-      .not('tags', 'is', null)
-      .limit(500)
-
-    if (templatesError) {
-      return NextResponse.json({ error: templatesError.message }, { status: 500 })
-    }
-
-    // Include templates whose fandom maps to this category OR who have a tag matching the fandom (e.g. #jjk)
-    const filtered = (templates || []).filter(
-      (t) =>
-        getAssetsCategory(t.fandom) === fandomCategory ||
-        tagsContainFandomCategory(t.tags, fandomCategory)
-    )
-    const rapidTemplates = filtered.filter(
-      (t) =>
-        Array.isArray(t.overlay) &&
-        t.overlay.length > 0 &&
-        t.carousel_type !== 'character_grid'
-    )
-    const candidateTemplates = rapidTemplates.length > 0 ? rapidTemplates : filtered
-
-    if (candidateTemplates.length === 0) {
-      return NextResponse.json(
-        {
-          error: `No unused templates for "${fandomCategory}". Add templates for this fandom or clear "used" on existing ones.`,
-        },
-        { status: 400 }
-      )
-    }
-
-    // Get music assets (prefer phonk genre)
+    // Get music assets (prefer phonk genre) – shared by video and carousel
     const { data: phonkAssets } = await supabase
       .from('assets')
       .select('id')
@@ -180,7 +156,8 @@ export async function POST(request: NextRequest) {
       return pool[Math.floor(Math.random() * pool.length)].id
     }
 
-    const created: { job_id: string; template_id: string; character?: string; account_id: string }[] = []
+    const createdVideos: { job_id: string; template_id: string; character?: string; account_id: string }[] = []
+    const createdCarousels: { job_id: string; template_id: string; character?: string; account_id: string }[] = []
     const errors: string[] = []
     const debugInfo: {
       subcategoriesInDb: string[]
@@ -195,7 +172,7 @@ export async function POST(request: NextRequest) {
       }>
     } = { subcategoriesInDb: [], failedTemplates: [] }
 
-    // Fetch subcategories once for the selected category (reuse for all templates + optional debug)
+    // Fetch subcategories once for the selected category (reuse for video + carousel + optional debug)
     // Include all category aliases that map to this fandom (e.g. jjk and jujutsu_kaisen)
     const categoryAliases = [
       fandomCategory,
@@ -256,135 +233,292 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Process each unused template once; assign jobs to accounts in round-robin so each gets ~1–2 for daily upload
-    for (const template of candidateTemplates) {
-      const category = fandomCategory
-
-      // First try to get assets linked directly to this template (from AI-powered template scraping)
-      let ids: string[] = []
-      let character: string | null = null
-      const { data: linkedAssets, error: linkedError } = await supabase
-        .from('asset_templates')
-        .select('asset_id')
-        .eq('template_id', template.id)
+    // --- Video generation: rapid video jobs (when mode is 'video' or 'both') ---
+    if (mode === 'video' || mode === 'both') {
+      const { data: templatesAll } = await supabase
+        .from('templates')
+        .select('id, fandom, tags, overlay, carousel_type')
+        .is('used', null)
+        .not('tags', 'is', null)
         .limit(500)
 
-      if (!linkedError && linkedAssets && linkedAssets.length >= IMAGES_PER_VIDEO) {
-        ids = linkedAssets.map((a: any) => a.asset_id)
-        character = findCharacterFromTags(template.tags, subcategories) || 'template_linked'
-      } else {
-        // Fall back to category/subcategory matching
-        character = findCharacterFromTags(template.tags, subcategories)
-        if (!character) {
-          errors.push(`Template ${template.id}: no character found in tags for category ${category}`)
-          if (debugMode) {
-            const normalized = normalizeTemplateTags(template.tags)
-            const candidateTags = normalized
-              .map((t) => (t || '').replace(/^#/, '').trim().toLowerCase())
-              .filter((r) => r && !NON_CHARACTER_TAGS.has(r))
-            debugInfo.failedTemplates.push({
-              template_id: template.id,
-              raw_tags: template.tags,
-              normalized_tags: normalized,
-              candidate_tags: candidateTags,
-              subcategories: [...subcategories],
-            })
-          }
-          continue
-        }
+      const filteredVideo = (templatesAll || []).filter(
+        (t: any) =>
+          getAssetsCategory(t.fandom) === fandomCategory ||
+          tagsContainFandomCategory(t.tags, fandomCategory)
+      )
+      const rapidTemplates = filteredVideo.filter(
+        (t: any) =>
+          Array.isArray(t.overlay) &&
+          t.overlay.length > 0 &&
+          t.carousel_type !== 'character_grid'
+      )
+      const candidateVideoTemplates = rapidTemplates.length > 0 ? rapidTemplates : filteredVideo
 
-        let imageAssets: { id: string }[] | null = null
-        let assetsError: { message: string } | null = null
-        const byCategory = await supabase
-          .from('assets')
-          .select('id')
-          .in('category', categoryAliases)
-          .eq('subcategory', character)
+      for (const template of candidateVideoTemplates) {
+        const category = fandomCategory
+
+        let ids: string[] = []
+        let character: string | null = null
+        const { data: linkedAssets, error: linkedError } = await supabase
+          .from('asset_templates')
+          .select('asset_id')
+          .eq('template_id', template.id)
           .limit(500)
-        imageAssets = byCategory.data
-        assetsError = byCategory.error
-        ids = (imageAssets || []).map((a: any) => a.id)
-        if (ids.length < IMAGES_PER_VIDEO) {
-          const pathPrefix = `assets/${category}/${character}/`
-          const byPath = await supabase
+
+        if (!linkedError && linkedAssets && linkedAssets.length >= IMAGES_PER_VIDEO) {
+          ids = linkedAssets.map((a: any) => a.asset_id)
+          character = findCharacterFromTags(template.tags, subcategories) || 'template_linked'
+        } else {
+          character = findCharacterFromTags(template.tags, subcategories)
+          if (!character) {
+            errors.push(`Template ${template.id}: no character found in tags for category ${category}`)
+            if (debugMode) {
+              const normalized = normalizeTemplateTags(template.tags)
+              const candidateTags = normalized
+                .map((t: string) => (t || '').replace(/^#/, '').trim().toLowerCase())
+                .filter((r: string) => r && !NON_CHARACTER_TAGS.has(r))
+              debugInfo.failedTemplates.push({
+                template_id: template.id,
+                raw_tags: template.tags,
+                normalized_tags: normalized,
+                candidate_tags: candidateTags,
+                subcategories: [...subcategories],
+              })
+            }
+            continue
+          }
+
+          const byCategory = await supabase
             .from('assets')
             .select('id')
-            .like('storage_path', `${pathPrefix}%`)
+            .in('category', categoryAliases)
+            .eq('subcategory', character)
             .limit(500)
-          if (byPath.data?.length) {
-            ids = byPath.data.map((a: any) => a.id)
+          ids = (byCategory.data || []).map((a: any) => a.id)
+          if (ids.length < IMAGES_PER_VIDEO) {
+            const pathPrefix = `assets/${category}/${character}/`
+            const byPath = await supabase
+              .from('assets')
+              .select('id')
+              .like('storage_path', `${pathPrefix}%`)
+              .limit(500)
+            if (byPath.data?.length) {
+              ids = byPath.data.map((a: any) => a.id)
+            }
+          }
+
+          if (byCategory.error) {
+            errors.push(`Template ${template.id}: ${byCategory.error.message}`)
+            continue
+          }
+          if (ids.length < IMAGES_PER_VIDEO) {
+            if (ids.length === 0) {
+              errors.push(
+                `Skipped: character "${character}" not scraped yet – no images in assets. Scrape this character first, then try again.`
+              )
+            } else {
+              errors.push(
+                `Skipped: character "${character}" has too few images (need ${IMAGES_PER_VIDEO}, found ${ids.length}). Scrape more assets for this character.`
+              )
+            }
+            continue
           }
         }
 
-        if (assetsError) {
-          errors.push(`Template ${template.id}: ${assetsError.message}`)
-          continue
-        }
-        if (ids.length < IMAGES_PER_VIDEO) {
-          if (ids.length === 0) {
-            errors.push(
-              `Skipped: character "${character}" not scraped yet – no images in assets. Scrape this character first, then try again.`
-            )
-          } else {
-            errors.push(
-              `Skipped: character "${character}" has too few images (need ${IMAGES_PER_VIDEO}, found ${ids.length}). Scrape more assets for this character.`
-            )
-          }
-          continue
-        }
-      }
+        const selectedIds = shuffleAndTake(ids, IMAGES_PER_VIDEO)
+        const musicAssetId = pickMusicId()
+        const accountIndex = (createdVideos.length + createdCarousels.length) % accounts.length
+        const accountId = accounts[accountIndex].id
 
-      const selectedIds = shuffleAndTake(ids, IMAGES_PER_VIDEO)
-      const musicAssetId = pickMusicId()
-      const accountIndex = created.length % accounts.length
-      const accountId = accounts[accountIndex].id
-
-      const { data: job, error: jobError } = await supabase
-        .from('video_jobs')
-        .insert({
-          template_id: template.id,
-          account_id: accountId,
-          post_type: 'video',
-          image_asset_ids: selectedIds,
-          image_duration: 0.2,
-          rapid_mode: true,
-          music_asset_id: musicAssetId || null,
-          music_url: null,
-          character_name: character,
-          visual_type: 'A',
-          effect_preset: 'random',
-          output_as_slides: false,
-          status: 'pending',
-          progress: 0,
-          logs: [],
-        })
-        .select('id')
-        .single()
-
-      if (jobError) {
-        errors.push(`Template ${template.id}: ${jobError.message}`)
-        continue
-      }
-
-      // Mark template as used
-      await supabase
-        .from('templates')
-        .update({
-          used: {
-            job_id: job.id,
-            used_at: new Date().toISOString(),
+        const { data: job, error: jobError } = await supabase
+          .from('video_jobs')
+          .insert({
+            template_id: template.id,
             account_id: accountId,
-            character,
-          },
-        })
-        .eq('id', template.id)
+            post_type: 'video',
+            image_asset_ids: selectedIds,
+            image_duration: 0.2,
+            rapid_mode: true,
+            music_asset_id: musicAssetId || null,
+            music_url: null,
+            character_name: character,
+            visual_type: 'A',
+            effect_preset: 'random',
+            output_as_slides: false,
+            status: 'pending',
+            progress: 0,
+            logs: [],
+          })
+          .select('id')
+          .single()
 
-      created.push({
-        job_id: job.id,
-        template_id: template.id,
-        character,
-        account_id: accountId,
-      })
+        if (jobError) {
+          errors.push(`Template ${template.id}: ${jobError.message}`)
+          continue
+        }
+
+        await supabase
+          .from('templates')
+          .update({
+            used: {
+              job_id: job.id,
+              used_at: new Date().toISOString(),
+              account_id: accountId,
+              character,
+            },
+          })
+          .eq('id', template.id)
+
+        createdVideos.push({
+          job_id: job.id,
+          template_id: template.id,
+          character,
+          account_id: accountId,
+        })
+      }
+    }
+
+    // --- Carousel generation: 4-image grid jobs (when mode is 'carousel' or 'both') ---
+    if (mode === 'carousel' || mode === 'both') {
+      const { data: templatesAllCarousel } = await supabase
+        .from('templates')
+        .select('id, fandom, tags, overlay, carousel_type, grid_images')
+        .is('used', null)
+        .not('tags', 'is', null)
+        .limit(500)
+
+      const filteredCarousel = (templatesAllCarousel || []).filter(
+        (t: any) =>
+          getAssetsCategory(t.fandom) === fandomCategory ||
+          tagsContainFandomCategory(t.tags, fandomCategory)
+      )
+      const carouselTemplates = filteredCarousel.filter(
+        (t: any) => t.carousel_type === 'character_grid' || t.grid_images === 4
+      )
+
+      for (const template of carouselTemplates) {
+        const category = fandomCategory
+
+        let ids: string[] = []
+        let character: string | null = null
+        const { data: linkedAssets } = await supabase
+          .from('asset_templates')
+          .select('asset_id')
+          .eq('template_id', template.id)
+          .limit(500)
+
+        if (linkedAssets && linkedAssets.length >= IMAGES_PER_CAROUSEL) {
+          ids = linkedAssets.map((a: any) => a.asset_id)
+          character = findCharacterFromTags(template.tags, subcategories) || 'template_linked'
+        } else {
+          character = findCharacterFromTags(template.tags, subcategories)
+          if (!character) {
+            errors.push(`Carousel template ${template.id}: no character found in tags for category ${category}`)
+            continue
+          }
+
+          const byCategory = await supabase
+            .from('assets')
+            .select('id')
+            .in('category', categoryAliases)
+            .eq('subcategory', character)
+            .limit(500)
+          ids = (byCategory.data || []).map((a: any) => a.id)
+          if (ids.length < IMAGES_PER_CAROUSEL) {
+            const pathPrefix = `assets/${category}/${character}/`
+            const byPath = await supabase
+              .from('assets')
+              .select('id')
+              .like('storage_path', `${pathPrefix}%`)
+              .limit(500)
+            if (byPath.data?.length) {
+              ids = byPath.data.map((a: any) => a.id)
+            }
+          }
+
+          if (ids.length < IMAGES_PER_CAROUSEL) {
+            if (ids.length === 0) {
+              errors.push(`Skipped carousel: character "${character}" has no images. Scrape this character first.`)
+            } else {
+              errors.push(
+                `Skipped carousel: character "${character}" has too few images (need ${IMAGES_PER_CAROUSEL}, found ${ids.length}).`
+              )
+            }
+            continue
+          }
+        }
+
+        const selectedIds = shuffleAndTake(ids, IMAGES_PER_CAROUSEL)
+        const musicAssetId = pickMusicId()
+        const accountIndex = (createdVideos.length + createdCarousels.length) % accounts.length
+        const accountId = accounts[accountIndex].id
+
+        const { data: job, error: jobError } = await supabase
+          .from('video_jobs')
+          .insert({
+            template_id: template.id,
+            account_id: accountId,
+            post_type: 'carousel',
+            carousel_layout: 'grid',
+            image_asset_ids: selectedIds,
+            image_duration: 3,
+            rapid_mode: false,
+            music_asset_id: musicAssetId || null,
+            music_url: null,
+            character_name: character,
+            visual_type: 'A',
+            effect_preset: 'none',
+            output_as_slides: false,
+            status: 'pending',
+            progress: 0,
+            logs: [],
+          })
+          .select('id')
+          .single()
+
+        if (jobError) {
+          errors.push(`Carousel template ${template.id}: ${jobError.message}`)
+          continue
+        }
+
+        await supabase
+          .from('templates')
+          .update({
+            used: {
+              job_id: job.id,
+              used_at: new Date().toISOString(),
+              account_id: accountId,
+              character,
+            },
+          })
+          .eq('id', template.id)
+
+        createdCarousels.push({
+          job_id: job.id,
+          template_id: template.id,
+          character,
+          account_id: accountId,
+        })
+      }
+    }
+
+    // When only one mode is requested and nothing was created, return 400 with a clear message
+    if (mode === 'video' && createdVideos.length === 0) {
+      return NextResponse.json(
+        {
+          error: `No unused video templates for "${fandomCategory}". Add templates (with overlay, not character_grid) or clear "used" on existing ones.`,
+        },
+        { status: 400 }
+      )
+    }
+    if (mode === 'carousel' && createdCarousels.length === 0) {
+      return NextResponse.json(
+        {
+          error: `No unused carousel templates for "${fandomCategory}". Add character_grid templates for this fandom or clear "used" on existing ones.`,
+        },
+        { status: 400 }
+      )
     }
 
     if (debugMode && debugInfo.failedTemplates.length > 0) {
@@ -396,14 +530,22 @@ export async function POST(request: NextRequest) {
       debugInfo.summary = `Templates use character tags (e.g. #choso, #yuji). A job is only created when that character exists in your assets. Your assets for this fandom have character folders: ${have}. This template wants one of: ${want}. Scrape those characters (e.g. in Assets or via your scraper) so their folder appears in the list, then run Auto Generate again.`
     }
 
+    const created = [...createdVideos, ...createdCarousels]
+    const parts: string[] = []
+    if (createdVideos.length > 0) parts.push(`${createdVideos.length} video(s)`)
+    if (createdCarousels.length > 0) parts.push(`${createdCarousels.length} carousel(s)`)
+    const message =
+      created.length > 0
+        ? `Created ${parts.join(' and ')} across ${accounts.length} account(s).${errors.length > 0 ? ` ${errors.length} skipped.` : ''}`
+        : 'No jobs created.'
+
     return NextResponse.json({
       created,
+      createdVideos,
+      createdCarousels,
       errors: errors.length > 0 ? errors : undefined,
       accountsUsed: accounts.length,
-      message:
-        created.length > 0
-          ? `Created ${created.length} video job(s) across ${accounts.length} account(s) (1–2 per account for daily upload).${errors.length > 0 ? ` ${errors.length} skipped.` : ''}`
-          : 'No jobs created.',
+      message,
       ...(debugMode && { debug: debugInfo }),
     })
   } catch (error: any) {

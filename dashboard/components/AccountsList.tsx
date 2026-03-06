@@ -11,6 +11,8 @@ import LocalFireDepartmentIcon from '@mui/icons-material/LocalFireDepartment'
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
 import ExpandLessIcon from '@mui/icons-material/ExpandLess'
 import ScreenshotMonitorIcon from '@mui/icons-material/ScreenshotMonitor'
+import LoginIcon from '@mui/icons-material/Login'
+import LogoutIcon from '@mui/icons-material/Logout'
 
 interface Account {
   id: string
@@ -23,6 +25,7 @@ interface Account {
   video_source?: string
   daily_post_target?: number
   intensity_ratio?: { T0: number; T1: number; T2: number }
+  logged_in?: boolean
   created_at: string
 }
 
@@ -267,10 +270,9 @@ export default function AccountsList({ initialAccounts }: AccountsListProps) {
     }
   }
 
-  const runWarmup = async () => {
-    const ids = Array.from(warmupSelectedIds)
-    if (ids.length === 0) {
-      setError('Select at least one account to run warmup.')
+  const runWarmupForIds = async (accountIds: string[]) => {
+    if (accountIds.length === 0) {
+      setError('No accounts to run warmup.')
       return
     }
     setWarmupRunning(true)
@@ -284,7 +286,7 @@ export default function AccountsList({ initialAccounts }: AccountsListProps) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          accountIds: ids,
+          accountIds,
           planName: warmupPlanName || 'warmup-plan',
           action: warmupAction,
           keywords: keywordsList,
@@ -305,6 +307,23 @@ export default function AccountsList({ initialAccounts }: AccountsListProps) {
     } finally {
       setWarmupRunning(false)
     }
+  }
+
+  const runWarmup = async () => {
+    const ids = Array.from(warmupSelectedIds)
+    if (ids.length === 0) {
+      setError('Select at least one account to run warmup.')
+      return
+    }
+    await runWarmupForIds(ids)
+  }
+
+  const runWarmupAll = async () => {
+    if (accounts.length === 0) {
+      setError('No accounts to run warmup.')
+      return
+    }
+    await runWarmupForIds(accounts.map((a) => a.id))
   }
 
   const checkLoginScreenshot = useCallback(async (account: Account) => {
@@ -355,6 +374,26 @@ export default function AccountsList({ initialAccounts }: AccountsListProps) {
     setScreenshotError(null)
     setScreenshotSteps([])
     setScreenshotTaskId(null)
+  }, [])
+
+  const setAccountLoggedIn = useCallback(async (accountId: string, loggedIn: boolean) => {
+    try {
+      const response = await fetch('/api/accounts', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: accountId, logged_in: loggedIn }),
+      })
+      if (!response.ok) {
+        const data = await response.json()
+        throw new Error(data.error || 'Failed to update')
+      }
+      const result = await response.json()
+      setAccounts((prev) =>
+        prev.map((a) => (a.id === accountId ? { ...a, ...result.data } : a))
+      )
+    } catch (err: any) {
+      setError(err.message || 'Failed to update login status')
+    }
   }, [])
 
   return (
@@ -527,6 +566,14 @@ export default function AccountsList({ initialAccounts }: AccountsListProps) {
                     >
                       {warmupRunning ? 'Running warmup…' : 'Run warmup'}
                     </Button>
+                    <Button
+                      variant="outlined"
+                      startIcon={warmupRunning ? <CircularProgress size={20} color="inherit" /> : <LocalFireDepartmentIcon />}
+                      onClick={runWarmupAll}
+                      disabled={warmupRunning || accounts.length === 0}
+                    >
+                      Run warmup for all accounts
+                    </Button>
                     </Box>
                   </Box>
                   {warmupLogs.length > 0 && (
@@ -591,9 +638,23 @@ export default function AccountsList({ initialAccounts }: AccountsListProps) {
                       {account.display_name}
                     </Typography>
                     <Chip label={account.persona} size="small" color="primary" />
+                    {account.logged_in === false && (
+                      <Chip label="Not logged in" size="small" color="warning" variant="outlined" />
+                    )}
                     <Box sx={{ flex: 1 }} />
                     {!isEditing && (
                       <>
+                        <IconButton
+                          size="small"
+                          onClick={() => setAccountLoggedIn(account.id, account.logged_in === false)}
+                          title={account.logged_in === false ? 'Mark as logged in' : 'Mark as not logged in'}
+                        >
+                          {account.logged_in === false ? (
+                            <LoginIcon fontSize="small" color="success" />
+                          ) : (
+                            <LogoutIcon fontSize="small" color="warning" />
+                          )}
+                        </IconButton>
                         <IconButton
                           size="small"
                           onClick={() => checkLoginScreenshot(account)}

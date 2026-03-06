@@ -3,6 +3,8 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { GeeLarkClient, GeeLarkError } from '@/lib/geelark'
 import { NextRequest, NextResponse } from 'next/server'
 
+const CAROUSEL_SLIDE_DURATION_SEC = 3
+
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
@@ -13,11 +15,20 @@ export async function POST(request: NextRequest) {
       caption,
       schedule_minutes = 120,
       plan_name = 'auto-plan',
+      post_type = 'video',
+      slide_urls,
     } = body
 
-    if (!video_url || !account_id) {
+    const isCarousel = post_type === 'carousel' && Array.isArray(slide_urls) && slide_urls.length > 0
+    if (!account_id) {
       return NextResponse.json(
-        { error: 'Missing required fields: video_url and account_id' },
+        { error: 'Missing required field: account_id' },
+        { status: 400 }
+      )
+    }
+    if (!isCarousel && !video_url) {
+      return NextResponse.json(
+        { error: 'Missing required field: video_url (or post_type=carousel with slide_urls)' },
         { status: 400 }
       )
     }
@@ -53,8 +64,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Initialize GeeLark client. Only GEELARK_API_KEY is required (Bearer token).
-    // GEELARK_APP_ID is optional (for key-verification mode); if unset, token-only auth is used.
+    // Initialize GeeLark client
     const geelarkApiBase = process.env.GEELARK_API_BASE || 'https://openapi.geelark.com'
     const geelarkApiKey = process.env.GEELARK_API_KEY
     const geelarkAppId = process.env.GEELARK_APP_ID?.trim() || undefined
@@ -66,9 +76,57 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    const scheduleAt = Math.floor(Date.now() / 1000) + schedule_minutes * 60
+
+    if (isCarousel) {
+      // Create carousel task (taskType 2) so TikTok shows it as a carousel, not a single video
+      let client = new GeeLarkClient(geelarkApiBase, geelarkApiKey, geelarkAppId)
+      let taskIds: string[]
+      try {
+        taskIds = await client.addCarouselTask(
+          {
+            envId: account.env_id,
+            slides: slide_urls,
+            videoDesc: templateCaption || '',
+            duration: CAROUSEL_SLIDE_DURATION_SEC,
+            scheduleAt,
+            needShareLink: false,
+            markAI: false,
+          },
+          plan_name
+        )
+      } catch (error: any) {
+        return NextResponse.json(
+          { error: `Failed to create GeeLark carousel task: ${error.message}` },
+          { status: 500 }
+        )
+      }
+
+      const adminSupabase = createAdminClient()
+      await adminSupabase.from('logs').insert({
+        type: 'carousel',
+        account_id: account_id,
+        status: 'pending',
+        scheduled_time: new Date(scheduleAt * 1000).toISOString(),
+        video_url: slide_urls[0] || null,
+        resource_url: slide_urls[0] || null,
+        task_id: taskIds[0] || null,
+        template_id: template_id || null,
+      })
+
+      return NextResponse.json({
+        success: true,
+        taskId: taskIds[0],
+        carousel: true,
+        slideCount: slide_urls.length,
+        scheduledAt: scheduleAt,
+        scheduledTime: new Date(scheduleAt * 1000).toISOString(),
+      })
+    }
+
+    // --- Video path (existing behavior) ---
     let client = new GeeLarkClient(geelarkApiBase, geelarkApiKey, geelarkAppId)
 
-    // Download video from Supabase Storage or URL
     let videoBlob: Blob
     try {
       const videoResponse = await fetch(video_url)
@@ -85,7 +143,6 @@ export async function POST(request: NextRequest) {
 
     const fileType = GeeLarkClient.inferFileType(video_url)
 
-    // Get upload URL: try token, then key verification, then apiKey-in-body, then alternate base URL.
     let uploadUrl: string = ''
     let resourceUrl: string = ''
     let uploadHeaders: Record<string, string> | undefined
@@ -124,7 +181,6 @@ export async function POST(request: NextRequest) {
     }
     client = new GeeLarkClient(winningBase, geelarkApiKey, winningAppId)
 
-    // Upload video to OSS presigned URL (signature must match request headers/body)
     try {
       await client.uploadFile(uploadUrl, videoBlob, { uploadHeaders })
     } catch (error: any) {
@@ -134,10 +190,6 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Calculate schedule time (minutes from now)
-    const scheduleAt = Math.floor(Date.now() / 1000) + schedule_minutes * 60
-
-    // Create GeeLark task
     let taskIds: string[]
     try {
       taskIds = await client.addTask(
@@ -158,7 +210,6 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Log to database as pending — actual success/failure is updated when GeeLark task completes (or when user views task detail).
     const adminSupabase = createAdminClient()
     const { error: logError } = await adminSupabase.from('logs').insert({
       type: 'video',
@@ -173,7 +224,6 @@ export async function POST(request: NextRequest) {
 
     if (logError) {
       console.error('Failed to log to database:', logError)
-      // Don't fail the request if logging fails
     }
 
     return NextResponse.json({

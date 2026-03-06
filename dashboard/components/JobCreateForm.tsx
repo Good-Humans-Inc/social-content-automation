@@ -23,6 +23,7 @@ import {
   CardMedia,
   Checkbox,
   FormControlLabel,
+  FormHelperText,
   Stack,
   Autocomplete,
 } from '@mui/material'
@@ -310,6 +311,7 @@ export default function JobCreateForm({ onSuccess, onCancel }: JobCreateFormProp
     music_url: '',
     character_name: '',
     carousel_id: '',
+    carousel_layout: 'single' as 'single' | 'grid',
     visual_type: 'A' as 'A' | 'B' | 'C',
     effect_preset: 'none' as 'none' | 'random' | 'cinematic' | 'energetic',
     output_as_slides: false,
@@ -611,6 +613,10 @@ export default function JobCreateForm({ onSuccess, onCancel }: JobCreateFormProp
       setError('At least one image asset is required for ' + formData.post_type)
       return
     }
+    if (formData.post_type === 'carousel' && formData.carousel_layout === 'grid' && formData.image_asset_ids.length % 4 !== 0) {
+      setError('For 4-image grid layout, select a multiple of 4 images (e.g. 4, 8, 12)')
+      return
+    }
 
     setLoading(true)
 
@@ -641,6 +647,9 @@ export default function JobCreateForm({ onSuccess, onCancel }: JobCreateFormProp
       }
       if (formData.carousel_id) {
         payload.carousel_id = formData.carousel_id
+      }
+      if (formData.post_type === 'carousel') {
+        payload.carousel_layout = formData.carousel_layout
       }
 
       const response = await fetch('/api/jobs', {
@@ -702,7 +711,13 @@ export default function JobCreateForm({ onSuccess, onCancel }: JobCreateFormProp
             <TemplateSelector
               value={formData.template_id}
               onChange={(templateId, template) => {
-                setFormData(prev => ({ ...prev, template_id: templateId }))
+                setFormData(prev => {
+                  const next = { ...prev, template_id: templateId }
+                  if (prev.post_type === 'carousel' && template?.carousel_type === 'character_grid') {
+                    next.carousel_layout = 'grid'
+                  }
+                  return next
+                })
                 setSelectedTemplateObject(template ?? null)
               }}
               label="Template"
@@ -1027,26 +1042,54 @@ export default function JobCreateForm({ onSuccess, onCancel }: JobCreateFormProp
             )}
 
             {formData.post_type === 'carousel' && (
-              <Box sx={{ display: 'flex', gap: 3, flexDirection: { xs: 'column', md: 'row' } }}>
-                <TextField
-                  fullWidth
-                  label="Character Name (Optional)"
-                  value={formData.character_name}
-                  onChange={(e) => setFormData(prev => ({ ...prev, character_name: e.target.value }))}
-                  placeholder="e.g., xavier, pochita"
-                  helperText="Character name for carousel first slide"
-                  sx={{ flex: 1, '& .MuiInputBase-input': { fontSize: '0.95rem' } }}
-                />
-                <TextField
-                  fullWidth
-                  label="Carousel ID (Optional)"
-                  value={formData.carousel_id}
-                  onChange={(e) => setFormData(prev => ({ ...prev, carousel_id: e.target.value }))}
-                  placeholder="Auto-generated if not provided"
-                  helperText="Custom identifier for this carousel"
-                  sx={{ flex: 1, '& .MuiInputBase-input': { fontSize: '0.95rem' } }}
-                />
-              </Box>
+              <>
+                <FormControl fullWidth sx={{ mb: 2 }}>
+                  <InputLabel id="carousel-layout-label">Slide layout</InputLabel>
+                  <Select
+                    labelId="carousel-layout-label"
+                    value={formData.carousel_layout}
+                    onChange={(e) => setFormData(prev => ({ ...prev, carousel_layout: e.target.value as 'single' | 'grid' }))}
+                    label="Slide layout"
+                    sx={{ fontSize: '0.95rem' }}
+                  >
+                    <MenuItem value="single" sx={{ fontSize: '0.95rem' }}>
+                      <Box>
+                        <Typography variant="body2" fontWeight="medium">One image per slide</Typography>
+                        <Typography variant="caption" color="text.secondary">Each slide shows a single image (with optional text overlay)</Typography>
+                      </Box>
+                    </MenuItem>
+                    <MenuItem value="grid" sx={{ fontSize: '0.95rem' }}>
+                      <Box>
+                        <Typography variant="body2" fontWeight="medium">4-image grid per slide (2×2)</Typography>
+                        <Typography variant="caption" color="text.secondary">Each slide shows 4 images in a grid. Select 4, 8, 12… images.</Typography>
+                      </Box>
+                    </MenuItem>
+                  </Select>
+                  <FormHelperText>
+                    {formData.carousel_layout === 'grid' ? 'Select a multiple of 4 images (4, 8, 12, etc.)' : 'Use one image per slide'}
+                  </FormHelperText>
+                </FormControl>
+                <Box sx={{ display: 'flex', gap: 3, flexDirection: { xs: 'column', md: 'row' } }}>
+                  <TextField
+                    fullWidth
+                    label="Character Name (Optional)"
+                    value={formData.character_name}
+                    onChange={(e) => setFormData(prev => ({ ...prev, character_name: e.target.value }))}
+                    placeholder="e.g., xavier, pochita"
+                    helperText="Character name for carousel first slide"
+                    sx={{ flex: 1, '& .MuiInputBase-input': { fontSize: '0.95rem' } }}
+                  />
+                  <TextField
+                    fullWidth
+                    label="Carousel ID (Optional)"
+                    value={formData.carousel_id}
+                    onChange={(e) => setFormData(prev => ({ ...prev, carousel_id: e.target.value }))}
+                    placeholder="Auto-generated if not provided"
+                    helperText="Custom identifier for this carousel"
+                    sx={{ flex: 1, '& .MuiInputBase-input': { fontSize: '0.95rem' } }}
+                  />
+                </Box>
+              </>
             )}
           </Box>
         </Box>
