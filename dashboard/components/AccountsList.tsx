@@ -638,9 +638,12 @@ export default function AccountsList({ initialAccounts }: AccountsListProps) {
                       {account.display_name}
                     </Typography>
                     <Chip label={account.persona} size="small" color="primary" />
-                    {account.logged_in === false && (
-                      <Chip label="Not logged in" size="small" color="warning" variant="outlined" />
-                    )}
+                    <Chip
+                      label={account.logged_in === true ? 'Logged in' : account.logged_in === false ? 'Not logged in' : 'Login unknown'}
+                      size="small"
+                      color={account.logged_in === true ? 'success' : account.logged_in === false ? 'warning' : 'default'}
+                      variant="outlined"
+                    />
                     <Box sx={{ flex: 1 }} />
                     {!isEditing && (
                       <>
