@@ -30,8 +30,10 @@ export default async function LogsPage() {
     .select('*', { count: 'exact', head: true })
     .eq('status', 'failed')
 
+  // Success rate = successful / (successful + failed) only; exclude pending/skipped/etc.
+  const completedCount = (successCount || 0) + (failedCount || 0)
   const successRate =
-    totalCount && totalCount > 0 ? ((successCount || 0) / totalCount) * 100 : 0
+    completedCount > 0 ? ((successCount || 0) / completedCount) * 100 : null
 
   return (
     <Container maxWidth="xl" sx={{ py: 4 }}>
@@ -91,7 +93,7 @@ export default async function LogsPage() {
               Success Rate
             </Typography>
             <Typography variant="h4" fontWeight="bold" color="primary.main">
-              {successRate.toFixed(1)}%
+              {successRate != null ? `${successRate.toFixed(1)}%` : '—'}
             </Typography>
           </CardContent>
         </Card>
