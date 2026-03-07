@@ -708,6 +708,80 @@ export class GeeLarkClient {
   static readonly TIKTOK_PACKAGE = 'com.zhiliaoapp.musically'
 
   /**
+   * Get list of applications installed on the cloud phone.
+   * POST /open/v1/app/list
+   * installStatus: 0=Installing, 1=Installed, 2=Failed, 3=Uninstalling, 4=Uninstalled, 5=Uninstall Failed, others=Not Installed
+   */
+  async listInstalledApps(
+    envId: string,
+    page: number = 1,
+    pageSize: number = 100
+  ): Promise<{
+    total: number
+    page: number
+    pageSize: number
+    items: Array<{
+      appIcon?: string
+      appId?: string
+      appName?: string
+      appVersionId?: string
+      installStatus: number
+      installTime?: string
+      packageName: string
+      versionCode?: string
+      versionName?: string
+    }>
+  }> {
+    if (!envId?.trim()) {
+      throw new GeeLarkError('envId is required for app/list', undefined, 400)
+    }
+    const headers = await this.getHeaders()
+    const response = await fetch(`${this.apiBase}/open/v1/app/list`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        envId: envId.trim(),
+        page: Math.max(1, page),
+        pageSize: Math.min(100, Math.max(1, pageSize)),
+      }),
+    })
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok) {
+      throw new GeeLarkError(
+        data.msg || `Failed to list apps: ${response.statusText}`,
+        data.code,
+        response.status
+      )
+    }
+    if (data.code !== 0 && data.code !== undefined) {
+      throw new GeeLarkError(
+        data.msg || 'GeeLark API error',
+        data.code,
+        response.status
+      )
+    }
+    const d = data.data || {}
+    return {
+      total: d.total ?? 0,
+      page: d.page ?? page,
+      pageSize: d.pageSize ?? pageSize,
+      items: Array.isArray(d.items) ? d.items : [],
+    }
+  }
+
+  /**
+   * Check if TikTok is installed on the cloud phone (installStatus === 1).
+   * Uses listInstalledApps with pageSize 100; if not found in first page and total > 100, returns false.
+   */
+  async isTikTokInstalled(envId: string): Promise<boolean> {
+    const { items } = await this.listInstalledApps(envId, 1, 100)
+    return items.some(
+      (app) =>
+        app.packageName === GeeLarkClient.TIKTOK_PACKAGE && app.installStatus === 1
+    )
+  }
+
+  /**
    * List RPA task flows (e.g. to get flowId for "view profile" flow).
    * POST /open/v1/task/flow/list
    */

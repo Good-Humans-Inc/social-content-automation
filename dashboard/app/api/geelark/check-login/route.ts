@@ -21,7 +21,7 @@ const RPA_POLL_MAX_WAIT_MS = 120_000
  *
  * For profile screen: Create an RPA flow in GeeLark with "Open App" (TikTok package) then "Click" on the Profile tab (bottom right). This app runs your flow then takes the screenshot. Get the flow id from the task-flows API or dashboard, then select it in "Check login - profile flow" or set GEELARK_PROFILE_VIEW_FLOW_ID.
  *
- * Returns { success, imageUrl?, taskId?, steps?: string[] }.
+ * Returns { success, imageUrl?, taskId?, steps?: string[], tiktokInstalled?: boolean }.
  */
 export async function POST(request: NextRequest) {
   try {
@@ -53,6 +53,7 @@ export async function POST(request: NextRequest) {
 
     const client = new GeeLarkClient(geelarkApiBase, geelarkApiKey, geelarkAppId)
     const steps: string[] = []
+    let tiktokInstalled: boolean = true
 
     if (fullWorkflow) {
       steps.push('Starting cloud phone...')
@@ -60,7 +61,17 @@ export async function POST(request: NextRequest) {
       steps.push('Waiting for device to boot...')
       await new Promise((r) => setTimeout(r, bootWaitMs))
 
-      if (profileViewFlowId) {
+      try {
+        steps.push('Checking if TikTok is installed...')
+        tiktokInstalled = await client.isTikTokInstalled(phoneId.trim())
+        if (!tiktokInstalled) {
+          steps.push('TikTok is not installed on this device. Skipping open app; screenshot will show current screen.')
+        }
+      } catch (listErr: unknown) {
+        steps.push(`Could not check installed apps: ${(listErr as Error).message}. Proceeding to open TikTok.`)
+      }
+
+      if (tiktokInstalled && profileViewFlowId) {
         try {
           steps.push('Running profile-view RPA flow (Open TikTok + Click Profile)...')
           const rpaTaskId = await client.addRpaTask(phoneId.trim(), profileViewFlowId, {
@@ -87,7 +98,7 @@ export async function POST(request: NextRequest) {
         } catch (rpaErr: unknown) {
           steps.push(`RPA flow skipped or failed: ${(rpaErr as Error).message}`)
         }
-      } else {
+      } else if (tiktokInstalled && !profileViewFlowId) {
         try {
           steps.push('Opening TikTok app...')
           await client.startApp(phoneId.trim())
@@ -128,6 +139,7 @@ export async function POST(request: NextRequest) {
       taskId,
       imageUrl: imageUrl ?? undefined,
       steps,
+      tiktokInstalled,
     })
   } catch (error: unknown) {
     console.error('Check-login error:', error)

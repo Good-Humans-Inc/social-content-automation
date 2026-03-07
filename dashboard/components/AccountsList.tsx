@@ -88,6 +88,7 @@ export default function AccountsList({ initialAccounts }: AccountsListProps) {
   const [screenshotError, setScreenshotError] = useState<string | null>(null)
   const [screenshotSteps, setScreenshotSteps] = useState<string[]>([])
   const [screenshotTaskId, setScreenshotTaskId] = useState<string | null>(null)
+  const [screenshotTiktokInstalled, setScreenshotTiktokInstalled] = useState<boolean | null>(null)
   const [taskFlows, setTaskFlows] = useState<Array<{ id: string; title?: string; desc?: string }>>([])
   const [taskFlowsLoading, setTaskFlowsLoading] = useState(false)
   const [profileViewFlowId, setProfileViewFlowId] = useState<string>('')
@@ -338,6 +339,7 @@ export default function AccountsList({ initialAccounts }: AccountsListProps) {
     setScreenshotError(null)
     setScreenshotSteps([])
     setScreenshotTaskId(null)
+    setScreenshotTiktokInstalled(null)
     try {
       const res = await fetch('/api/geelark/check-login', {
         method: 'POST',
@@ -357,6 +359,7 @@ export default function AccountsList({ initialAccounts }: AccountsListProps) {
       }
       setScreenshotSteps(data.steps || [])
       setScreenshotTaskId(data.taskId || null)
+      setScreenshotTiktokInstalled(data.tiktokInstalled ?? true)
       const src = data.imageUrl || (data.imageBase64 ? `data:image/png;base64,${data.imageBase64}` : null)
       setScreenshotImage(src || null)
       if (!src && !data.taskId) setScreenshotError('No image or taskId returned.')
@@ -374,6 +377,7 @@ export default function AccountsList({ initialAccounts }: AccountsListProps) {
     setScreenshotError(null)
     setScreenshotSteps([])
     setScreenshotTaskId(null)
+    setScreenshotTiktokInstalled(null)
   }, [])
 
   const setAccountLoggedIn = useCallback(async (accountId: string, loggedIn: boolean) => {
@@ -910,6 +914,11 @@ export default function AccountsList({ initialAccounts }: AccountsListProps) {
                 Starting phone → opening TikTok → capturing screenshot…
               </Typography>
             </Box>
+          )}
+          {screenshotTiktokInstalled === false && !screenshotLoading && (
+            <Alert severity="warning" sx={{ mb: 2 }}>
+              TikTok is not installed on this cloud phone. Install the TikTok app on the device, then run Check login again to verify the account.
+            </Alert>
           )}
           {screenshotSteps.length > 0 && !screenshotLoading && (
             <Stack component="ul" sx={{ pl: 2, mb: 2, '& li': { mb: 0.5 } }}>
