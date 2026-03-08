@@ -23,6 +23,7 @@ import {
 } from '@mui/material'
 import VisibilityIcon from '@mui/icons-material/Visibility'
 import CloseIcon from '@mui/icons-material/Close'
+import RefreshIcon from '@mui/icons-material/Refresh'
 
 interface PostLog {
   id: string
@@ -92,6 +93,7 @@ const STATUS_LABELS: Record<number, string> = {
 export default function LogsList({ initialLogs }: LogsListProps) {
   const router = useRouter()
   const [logs, setLogs] = useState<Log[]>(initialLogs)
+  const [refreshing, setRefreshing] = useState(false)
   const [detailTaskId, setDetailTaskId] = useState<string | null>(null)
   const [detail, setDetail] = useState<TaskDetail | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
@@ -100,7 +102,19 @@ export default function LogsList({ initialLogs }: LogsListProps) {
 
   useEffect(() => {
     setLogs(initialLogs)
+    setRefreshing(false)
   }, [initialLogs])
+
+  const handleRefresh = useCallback(async () => {
+    setRefreshing(true)
+    try {
+      // Sync pending log statuses from GeeLark so tags update without opening each GeeLark detail
+      await fetch('/api/logs/sync-status', { method: 'POST' })
+    } catch {
+      // Non-blocking: still refresh from DB
+    }
+    router.refresh()
+  }, [router])
 
   const loadTaskDetail = useCallback(async (taskId: string, searchAfter?: unknown) => {
     setDetailLoading(true)
@@ -171,6 +185,17 @@ export default function LogsList({ initialLogs }: LogsListProps) {
 
   return (
     <>
+      <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 2 }}>
+        <Button
+          variant="outlined"
+          size="small"
+          startIcon={refreshing ? <CircularProgress size={18} /> : <RefreshIcon />}
+          onClick={handleRefresh}
+          disabled={refreshing}
+        >
+          {refreshing ? 'Refreshing…' : 'Refresh logs'}
+        </Button>
+      </Box>
       <TableContainer component={Paper}>
         <Table size="small" stickyHeader>
           <TableHead>
